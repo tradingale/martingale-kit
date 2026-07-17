@@ -13,6 +13,12 @@ This kit is everything that was hard to get right, as exact, tested TypeScript:
 
 What it deliberately does **not** contain: a connection to any real exchange. The `VenueAdapter` interface is documented and left to you (or to your coding agent). Your adapter, your keys, your account, your sole responsibility. Tradingale never places orders, holds funds, or gives advice.
 
+## The mental model, in five sentences
+
+A sequence is **not** adaptive. It is frozen at birth: the first market buy fixes the entry price, and every other order is computed at that instant (all the limit buys and all the sell templates); nothing is ever recomputed. Every buy can rest on the book from second one. Only **one** order ever changes: the sell. A limit buy fills? Cancel the sell, place the next level's template (cumulative quantity, at the previous level's buy price). The sell fills? The sequence is over, above its average cost by construction.
+
+`reconcile()` in this kit is exactly those five sentences as a pure function.
+
 ## Quickstart (paper, zero keys)
 
 ```ts
