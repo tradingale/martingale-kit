@@ -10,6 +10,7 @@
 // position and partial fills; paper results flatter you (handbook, section 7).
 
 import type { Fill, PlannedOrder, VenueOrder } from '../types.js';
+import type { SequencePlan } from '../engine.js';
 import type { VenueAdapter } from './types.js';
 
 interface PaperOrder extends VenueOrder {
@@ -55,6 +56,33 @@ export class PaperAdapter implements VenueAdapter {
 
   async getFills(): Promise<Fill[]> {
     return this.fills.map((f) => ({ ...f }));
+  }
+
+  /**
+   * Rebuild the adapter from a persisted plan + fill log (runner restarts).
+   * Buys are re-materialized (filled if a fill exists, open otherwise);
+   * sells are only re-materialized once filled — a live-but-unfilled sell is
+   * deliberately dropped and re-placed by the next reconcile() cycle, which
+   * keeps restore() free of any engine-state knowledge.
+   */
+  restore(plan: SequencePlan, fills: Fill[]): void {
+    this.orders.clear();
+    this.fills = fills.map((f) => ({ ...f }));
+    this.clock = fills.length;
+    const filledIds = new Set(fills.map((f) => f.clientId));
+    for (const order of plan.orders) {
+      const isFilled = filledIds.has(order.clientId);
+      if (order.side === 'sell' && !isFilled) continue;
+      this.orders.set(order.clientId, {
+        clientId: order.clientId,
+        side: order.side,
+        status: isFilled ? 'filled' : 'open',
+        type: order.type,
+        price: order.price,
+        quantity: order.quantity,
+        filledQuantity: isFilled ? order.quantity : 0,
+      });
+    }
   }
 
   /** Advance the simulated market to `price`, filling whatever crosses. */

@@ -47,6 +47,23 @@ state = await runCycle(plan, state, venue); // phase: 'complete'
 
 Run the tests: `npm install && npm test`.
 
+## The Runner (the bot, self-hosted, paper-first)
+
+The kit ships a ready-to-run sequence bot. Everything happens on YOUR machine: your token, your files, later your keys. Paper by default, driven by real public market prices.
+
+```bash
+git clone https://github.com/tradingale/martingale-kit && cd martingale-kit && npm install
+export TRADINGALE_TOKEN=...   # tradingale.com/settings/api
+
+npm run runner -- start --symbol BTC --budget 5000   # freezes the plan, places the paper entry
+npm run runner -- watch                              # reconciles every 10 minutes
+npm run runner -- status                             # where every sequence stands
+```
+
+- The plan is persisted to `.martingale-runner/` before anything is placed (atomic writes); a crash or reboot resumes by replaying the file, exactly like the handbook says.
+- Underfunded ladders are refused with the computed `budget_min` instead of being silently distorted.
+- Live venue adapters are the next step; when they land, keys stay local and `--live` is an explicit flag, off by default.
+
 ## The one prompt
 
 Paste this into Claude Code, Cursor, or any coding agent:

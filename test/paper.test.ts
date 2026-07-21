@@ -44,3 +44,34 @@ describe('full paper run: entry, dip, sell replacement, recovery, completion', (
     expect(sold).toBeGreaterThan(bought);
   });
 });
+
+describe('paper restore: crash and resume', () => {
+  it('resumes from a persisted fill log and re-places the missing sell', async () => {
+    const params = { deltaPrice: 0.05, nbRounds: 4, multipliers: [2, 2, 2], initialBetRatio: 0.1 };
+    const ladder = computeLadder(params, 1_000, 100);
+    const plan = buildPlan('crash1', ladder);
+    const before = new PaperAdapter();
+    before.tick(100);
+    for (const a of entryActions(plan)) if (a.type === 'placeOrder') await before.placeOrder(a.order);
+    let state = initialState();
+    state = await runCycle(plan, state, before); // sell 1 live
+    const fills = await before.getFills();
+
+    // "Reboot": rebuild a fresh adapter from plan + fills only.
+    const after = new PaperAdapter();
+    after.restore(plan, fills);
+    expect((await after.getOpenOrders()).filter((o) => o.side === 'sell')).toHaveLength(0);
+    state = await runCycle(plan, state, after); // re-places the missing sell 1... or cancel path
+    const sells = (await after.getOpenOrders()).filter((o) => o.side === 'sell');
+    expect(sells).toHaveLength(1);
+    expect(sells[0].clientId).toBe('crash1-sell-1');
+
+    // The world keeps working after restore: dip, replace, complete.
+    after.tick(95);
+    state = await runCycle(plan, state, after);
+    state = await runCycle(plan, state, after);
+    after.tick(100);
+    state = await runCycle(plan, state, after);
+    expect(state.phase).toBe('complete');
+  });
+});
