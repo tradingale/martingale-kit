@@ -22,7 +22,11 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "runner": "tsx src/runner/cli.ts"
+    "runner": "tsx src/runner/cli.ts",
+    "server": "tsx src/server/index.ts"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "devDependencies": {
     "tsx": "^4.19.0",

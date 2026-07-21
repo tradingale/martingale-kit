@@ -14,4 +14,11 @@ export {
 } from './engine.js';
 export type { VenueAdapter } from './adapters/types.js';
 export { PaperAdapter } from './adapters/paper.js';
+export {
+  KrakenAdapter,
+  fetchKrakenGrids,
+  resolveKrakenPair,
+  krakenSignature,
+  type KrakenAdapterOptions,
+} from './adapters/kraken.js';
 export { TradingaleClient, type TradingaleInstrument } from './client.js';

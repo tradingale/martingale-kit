@@ -16,10 +16,16 @@ export interface RunnerFile {
   state: SequenceState;
   /** Fill log for the paper venue so a restart replays the same world. */
   paperFills?: unknown[];
+  /** Last public price observed by a cycle (display only, never a promise). */
+  lastPrice?: number;
+  /** When the last reconciliation cycle ran (ISO). */
+  lastCycleAt?: string;
 }
 
 export function runnerDir(): string {
-  const dir = path.join(process.cwd(), '.martingale-runner');
+  // RUNNER_STATE_DIR lets hosted deployments (e.g. a Railway volume) keep
+  // the plan files on a persistent mount instead of the ephemeral cwd.
+  const dir = process.env.RUNNER_STATE_DIR ?? path.join(process.cwd(), '.martingale-runner');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

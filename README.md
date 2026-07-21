@@ -11,7 +11,7 @@ This kit is everything that was hard to get right, as exact, tested TypeScript:
 - **A `PaperAdapter`**: local fill simulator. The whole engine runs end to end with zero keys, right now.
 - **A `TradingaleClient`**: fetches the model parameters from the [REST API](https://tradingale.com/settings/api).
 
-What it deliberately does **not** contain: a connection to any real exchange. The `VenueAdapter` interface is documented and left to you (or to your coding agent). Your adapter, your keys, your account, your sole responsibility. Tradingale never places orders, holds funds, or gives advice.
+Exchange connectivity is a thin, replaceable layer: the `VenueAdapter` interface is documented, and one reference implementation ships in-repo (`KrakenAdapter`, ported from our production Kraken integration), behind an explicit live mode that is OFF by default. Other venues are left to you (or to your coding agent). Your adapter, your keys, your account, your sole responsibility. Tradingale never places orders, holds funds, or gives advice.
 
 ## The mental model, in five sentences
 
@@ -62,7 +62,40 @@ npm run runner -- status                             # where every sequence stan
 
 - The plan is persisted to `.martingale-runner/` before anything is placed (atomic writes); a crash or reboot resumes by replaying the file, exactly like the handbook says.
 - Underfunded ladders are refused with the computed `budget_min` instead of being silently distorted.
-- Live venue adapters are the next step; when they land, keys stay local and `--live` is an explicit flag, off by default.
+- Live execution on Kraken ships in-repo (`src/adapters/kraken.ts`) behind the explicit `--live` flag, off by default. It requires `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` (trade-only permission, never withdrawal, IP allowlisting) and places REAL orders on your account. Even paper mode snaps ladders to the real Kraken grids when they can be fetched, so paper plans match what live would submit.
+
+## The web runner
+
+The same runner, as a small web app: one `node:http` server hosts the status UI and runs the 10-minute reconciliation loop in the same process.
+
+```bash
+export TRADINGALE_TOKEN=...       # tradingale.com/settings/api
+npm run server                    # paper by default, http://localhost:8080
+```
+
+- The page shows each sequence as the Tradingale price ladder (model buy level, model exit level, outcome if reached) plus phase, level reached, budget, last price and venue. It refreshes every 30 seconds.
+- `RUNNER_MODE=live` switches to the Kraken adapter, shows a permanent red banner, and refuses to start sequences while keys are missing. Paper mode shows an amber "Simulated" banner.
+- Stopping a sequence halts the loop for it and cancels NOTHING at the venue: cancel your open orders on Kraken yourself.
+- Set `RUNNER_PASSWORD` to put the whole server behind Basic Auth.
+
+## Deploy on Railway
+
+Run the web runner on a small always-on box. Paper by default there too. Your keys live in YOUR Railway project; Tradingale never sees them.
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/github?repo=https://github.com/tradingale/martingale-kit)
+
+Variables:
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `TRADINGALE_TOKEN` | yes | Model parameters token, from [tradingale.com/settings/api](https://tradingale.com/settings/api). |
+| `RUNNER_MODE` | no | `paper` (default) or `live`. Live places real orders on your Kraken account. |
+| `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` | live only | Create them trade-only (no withdrawal) and IP-allowlisted. Read from env, never logged, never served. |
+| `RUNNER_PASSWORD` | recommended | Basic Auth for the whole UI. Without it the page is open to anyone who finds the URL. |
+| `RUNNER_STATE_DIR` | recommended | Mount a [Railway volume](https://docs.railway.com/volumes) and point this at it (e.g. `/data`). Containers are ephemeral: without a volume, a redeploy forgets your sequence files. In live mode your orders would keep resting on Kraken with nothing reconciling them. |
+| `PORT` | auto | Injected by Railway. |
+
+The deploy config lives in `railway.json` (start command `npm run server`, healthcheck `GET /api/state`). Note for live mode on any hosted box: Kraken API keys can be IP-allowlisted only if your egress IP is stable; hosted containers usually are not, so weigh that against running the runner at home.
 
 ## The one prompt
 
