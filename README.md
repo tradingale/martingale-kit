@@ -60,6 +60,7 @@ npm run runner -- watch                              # reconciles every 10 minut
 npm run runner -- status                             # where every sequence stands
 ```
 
+- Crypto AND US stocks both run in paper: crypto prices come from public exchange tickers, stock prices from a free delayed feed (about 15 minutes; fine for a 10-minute reconciliation loop, and disclosed here on purpose). Live mode currently covers Kraken (crypto); the Alpaca adapter for live stocks is next.
 - The plan is persisted to `.martingale-runner/` before anything is placed (atomic writes); a crash or reboot resumes by replaying the file, exactly like the handbook says.
 - Underfunded ladders are refused with the computed `budget_min` instead of being silently distorted.
 - Live execution on Kraken ships in-repo (`src/adapters/kraken.ts`) behind the explicit `--live` flag, off by default. It requires `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` (trade-only permission, never withdrawal, IP allowlisting) and places REAL orders on your account. Even paper mode snaps ladders to the real Kraken grids when they can be fetched, so paper plans match what live would submit.

@@ -28,8 +28,26 @@ export async function krakenPublicPrice(symbol: string): Promise<number> {
   return parseFloat(first.c[0]);
 }
 
-/** Try Binance first, fall back to Kraken. */
-export async function publicPrice(symbol: string): Promise<number> {
+/**
+ * Stooq free CSV quote for US stocks (no key required, ~15 min delayed).
+ * Delayed prices are fine for a paper runner reconciling every 10 minutes;
+ * the delay is disclosed in the README and the UI.
+ */
+export async function stooqStockPrice(symbol: string): Promise<number> {
+  const res = await fetch(
+    `https://stooq.com/q/l/?s=${symbol.toLowerCase()}.us&f=sd2t2ohlcv&h&e=csv`,
+  );
+  if (!res.ok) throw new Error(`Stooq ${res.status} for ${symbol}`);
+  const lines = (await res.text()).trim().split('\n');
+  const close = lines[1]?.split(',')[6];
+  const price = parseFloat(close ?? '');
+  if (!Number.isFinite(price) || price <= 0) throw new Error(`Stooq: no quote for ${symbol}`);
+  return price;
+}
+
+/** Crypto: Binance first, Kraken fallback. Stocks: Stooq (delayed). */
+export async function publicPrice(symbol: string, assetType: 'crypto' | 'stock' = 'crypto'): Promise<number> {
+  if (assetType === 'stock') return stooqStockPrice(symbol);
   try {
     return await binancePublicPrice(symbol);
   } catch {

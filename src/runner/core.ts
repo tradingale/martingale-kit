@@ -73,7 +73,13 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
   }
 
   const client = new TradingaleClient(token);
-  const instruments = await client.crypto({ symbol });
+  // Crypto first, then US stocks: the Runner covers both catalogs in paper.
+  let assetType: 'crypto' | 'stock' = 'crypto';
+  let instruments = await client.crypto({ symbol });
+  if (!instruments[0]) {
+    instruments = await client.stocks({ symbol }).catch(() => []);
+    if (instruments[0]) assetType = 'stock';
+  }
   const instrument = instruments[0];
   if (!instrument) throw new Error(`No fresh Tradingale data for ${symbol} (check your plan's scope)`);
   if (!Number.isFinite(instrument.initialBetRatio)) {
@@ -101,7 +107,10 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     }
   }
 
-  const entry = mode === 'live' ? await krakenPublicPrice(symbol) : await publicPrice(symbol);
+  if (mode === 'live' && assetType === 'stock') {
+    throw new Error('Live mode currently covers Kraken (crypto) only; stocks run in paper until the Alpaca adapter ships.');
+  }
+  const entry = mode === 'live' ? await krakenPublicPrice(symbol) : await publicPrice(symbol, assetType);
 
   // budgetMin / grid check BEFORE anything is placed: refuse a distorted
   // ladder and surface the floor instead (handbook section 5).
@@ -119,6 +128,7 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     version: 1,
     createdAt: new Date().toISOString(),
     symbol,
+    assetType,
     venue: mode === 'live' ? 'kraken' : 'paper',
     budget,
     plan,
@@ -224,7 +234,7 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
     price = await krakenPublicPrice(file.symbol);
   } else {
     const paper = rebuildPaper(file);
-    price = await publicPrice(file.symbol);
+    price = await publicPrice(file.symbol, file.assetType ?? 'crypto');
     paper.tick(price);
     venue = paper;
   }

@@ -10,6 +10,7 @@ export interface RunnerFile {
   version: 1;
   createdAt: string;
   symbol: string;
+  assetType?: 'crypto' | 'stock';
   venue: 'paper' | 'kraken';
   budget: number;
   plan: SequencePlan;
