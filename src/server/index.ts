@@ -11,6 +11,9 @@
 // Env:
 //   TRADINGALE_TOKEN   required to start sequences (model parameters)
 //   RUNNER_MODE        paper (default) | live
+//   KRAKEN_API_KEY / KRAKEN_API_SECRET      live crypto (Kraken)
+//   ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY  live US stocks (Alpaca)
+//   ALPACA_PAPER       'true' points the Alpaca rail at its paper environment
 //   KRAKEN_API_KEY     live mode only
 //   KRAKEN_API_SECRET  live mode only
 //   RUNNER_PASSWORD    optional; when set, Basic Auth guards the server
