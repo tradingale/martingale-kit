@@ -21,4 +21,5 @@ export {
   krakenSignature,
   type KrakenAdapterOptions,
 } from './adapters/kraken.js';
+export { AlpacaAdapter, AlpacaHttpError, baseClientId, type AlpacaAdapterOptions } from './adapters/alpaca.js';
 export { TradingaleClient, type TradingaleInstrument } from './client.js';

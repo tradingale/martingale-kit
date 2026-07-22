@@ -24,7 +24,8 @@ export class PaperAdapter implements VenueAdapter {
   private clock = 0;
 
   async placeOrder(order: PlannedOrder): Promise<void> {
-    if (this.orders.has(order.clientId)) {
+    const existing = this.orders.get(order.clientId);
+    if (existing && existing.status !== 'canceled' && existing.status !== 'expired') {
       throw new Error(`duplicate clientId: ${order.clientId}`);
     }
     const paper: PaperOrder = {

@@ -140,6 +140,20 @@ export function reconcile(
     if (planned.level > deepest) deepest = planned.level;
   }
   next.deepestFilledLevel = deepest;
+
+  // 2b. Day-order venues expire resting buys (Alpaca stock 'day' orders at
+  // market close, our production lesson): re-place any deeper planned limit
+  // buy that is neither open nor filled. Adapters whose venue rejects
+  // clientId reuse may suffix it and match by prefix.
+  const openIds = new Set(snapshot.openOrders.map((o) => o.clientId));
+  const filledIds = new Set(snapshot.fills.map((f) => f.clientId));
+  for (const planned of plan.orders) {
+    if (planned.side !== 'buy' || planned.type !== 'limit') continue;
+    if (planned.level <= deepest) continue;
+    if (openIds.has(planned.clientId) || filledIds.has(planned.clientId)) continue;
+    actions.push({ type: 'placeOrder', order: planned });
+  }
+
   if (deepest === 0) return { actions, state: next }; // entry not filled yet
 
   const openSell = openSells[0] ?? null;

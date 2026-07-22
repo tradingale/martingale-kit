@@ -11,6 +11,7 @@ import { budgetMin, checkLadderAgainstGrids, computeLadder } from '../ladder.js'
 import { buildPlan, entryActions, initialState, reconcile, type EngineAction } from '../engine.js';
 import { PaperAdapter } from '../adapters/paper.js';
 import { KrakenAdapter, fetchKrakenGrids } from '../adapters/kraken.js';
+import { AlpacaAdapter } from '../adapters/alpaca.js';
 import type { VenueAdapter } from '../adapters/types.js';
 import { TradingaleClient } from '../client.js';
 import type { Fill, LadderLevel, VenueGrids } from '../types.js';
@@ -49,7 +50,7 @@ export interface StartSummary {
   sequenceId: string;
   symbol: string;
   mode: RunnerMode;
-  venue: 'paper' | 'kraken';
+  venue: 'paper' | 'kraken' | 'alpaca';
   entryPrice: number;
   levels: number;
   budget: number;
@@ -66,11 +67,6 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
   const budget = Number(options.budget);
   if (!Number.isFinite(budget) || budget <= 0) throw new Error('budget must be a positive number');
   const mode = options.mode;
-  if (mode === 'live' && !krakenKeysPresent()) {
-    throw new Error(
-      'Live mode refused: KRAKEN_API_KEY and KRAKEN_API_SECRET are not set. Live places real orders on your Kraken account.',
-    );
-  }
 
   const client = new TradingaleClient(token);
   // Crypto first, then US stocks: the Runner covers both catalogs in paper.
@@ -91,26 +87,45 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
   // Grids: live resolves through the adapter (a missing pair refuses the
   // start); paper tries the same public AssetPairs data and degrades to
   // null grids when Kraken cannot be reached.
-  let adapter: KrakenAdapter | null = null;
+  // Live venue by asset class: Kraken carries crypto, Alpaca carries US
+  // stocks (ALPACA_PAPER=true targets Alpaca's paper environment: same rail,
+  // safety setting). Keys are checked before anything is computed.
+  let adapter: KrakenAdapter | AlpacaAdapter | null = null;
   let grids = NULL_GRIDS;
   let hasGrids = false;
-  if (mode === 'live') {
+  if (mode === 'live' && assetType === 'crypto') {
+    if (!krakenKeysPresent()) {
+      throw new Error(
+        'Live mode refused: KRAKEN_API_KEY and KRAKEN_API_SECRET are not set. Live places real orders on your Kraken account.',
+      );
+    }
     adapter = new KrakenAdapter({ symbol, sequenceId, sinceMs: Date.now() - 5 * 60 * 1000 });
     grids = await adapter.getGrids();
     hasGrids = true;
+  } else if (mode === 'live' && assetType === 'stock') {
+    const alpaca = new AlpacaAdapter({
+      symbol,
+      assetType,
+      paper: process.env.ALPACA_PAPER === 'true',
+    }); // throws a clear error when ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY are missing
+    if (!(await alpaca.isMarketOpen())) {
+      throw new Error('US market is closed: a market entry placed now would queue blindly. Start during market hours.');
+    }
+    adapter = alpaca;
+    grids = await alpaca.getGrids();
+    hasGrids = true;
   } else {
     try {
-      grids = await fetchKrakenGrids(symbol);
-      hasGrids = true;
+      grids = assetType === 'crypto' ? await fetchKrakenGrids(symbol) : NULL_GRIDS;
+      hasGrids = assetType === 'crypto';
     } catch {
       grids = NULL_GRIDS;
     }
   }
 
-  if (mode === 'live' && assetType === 'stock') {
-    throw new Error('Live mode currently covers Kraken (crypto) only; stocks run in paper until the Alpaca adapter ships.');
-  }
-  const entry = mode === 'live' ? await krakenPublicPrice(symbol) : await publicPrice(symbol, assetType);
+  const entry = mode === 'live' && assetType === 'crypto'
+    ? await krakenPublicPrice(symbol)
+    : await publicPrice(symbol, assetType);
 
   // budgetMin / grid check BEFORE anything is placed: refuse a distorted
   // ladder and surface the floor instead (handbook section 5).
@@ -129,7 +144,7 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     createdAt: new Date().toISOString(),
     symbol,
     assetType,
-    venue: mode === 'live' ? 'kraken' : 'paper',
+    venue: mode === 'live' ? (assetType === 'stock' ? 'alpaca' : 'kraken') : 'paper',
     budget,
     plan,
     state: initialState(),
@@ -156,7 +171,7 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     // Real orders may already rest on the book: halt loudly, cancel nothing.
     const message = error instanceof Error ? error.message : String(error);
     file.state.phase = 'halted';
-    file.state.haltReason = `entry placement failed: ${message}. Check and cancel your open orders on Kraken yourself.`;
+    file.state.haltReason = `entry placement failed: ${message}. Check and cancel your open orders on the venue yourself.`;
     saveRun(file, sequenceId);
     throw new Error(file.state.haltReason);
   }
@@ -232,6 +247,13 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
       sinceMs: Date.parse(file.createdAt) - 60 * 1000,
     });
     price = await krakenPublicPrice(file.symbol);
+  } else if (file.venue === 'alpaca') {
+    venue = new AlpacaAdapter({
+      symbol: file.symbol,
+      assetType: file.assetType ?? 'stock',
+      paper: process.env.ALPACA_PAPER === 'true',
+    });
+    price = await publicPrice(file.symbol, file.assetType ?? 'stock');
   } else {
     const paper = rebuildPaper(file);
     price = await publicPrice(file.symbol, file.assetType ?? 'crypto');
@@ -278,7 +300,7 @@ export async function cycleAll(log: Logger = () => {}): Promise<CycleSummary[]> 
 
 export interface StopSummary {
   sequenceId: string;
-  venue: 'paper' | 'kraken';
+  venue: 'paper' | 'kraken' | 'alpaca';
   phase: string;
   warning: string | null;
 }
@@ -309,7 +331,7 @@ export function stopSequence(sequenceId: string): StopSummary {
 export interface SequenceStatus {
   sequenceId: string;
   symbol: string;
-  venue: 'paper' | 'kraken';
+  venue: 'paper' | 'kraken' | 'alpaca';
   phase: string;
   haltReason: string | null;
   budget: number;
