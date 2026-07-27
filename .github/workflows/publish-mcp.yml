@@ -1,0 +1,41 @@
+name: Publish to MCP Registry
+
+# Publishes server.json to the official MCP registry under the
+# io.github.tradingale/* namespace.
+#
+# WHY THIS EXISTS: the namespace belongs to the `tradingale` GitHub org,
+# and the org restricts third-party OAuth apps — so `mcp-publisher login
+# github` from a laptop only ever gets io.github.Mqrtingaler/* and 403s on
+# the org namespace. GitHub Actions OIDC sidesteps that entirely: a
+# workflow running in a tradingale-owned repo authenticates AS the org
+# (repository_owner = tradingale), which the org always trusts, with no
+# change to the OAuth policy.
+#
+# Run it: Actions tab -> "Publish to MCP Registry" -> Run workflow.
+# Bump the version in server.json before each publish (the registry
+# rejects re-publishing an existing version).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required: lets the job mint the OIDC token
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Authenticate (GitHub Actions OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        run: ./mcp-publisher publish

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.tradingale/mcp",
+  "version": "1.1.2",
+  "description": "Read-only martingale data: Martingale Score & Startingale for 250+ cryptos and US stocks.",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://tradingale.com/mcp"
+    }
+  ]
+}
