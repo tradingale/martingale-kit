@@ -21,7 +21,7 @@ export interface SequencePlan {
   orders: PlannedOrder[];
 }
 
-export type SequencePhase = 'running' | 'complete' | 'halted';
+export type SequencePhase = 'running' | 'complete' | 'halted' | 'canceled';
 
 /** The engine's persisted state. Store it next to the plan; never in memory only. */
 export interface SequenceState {

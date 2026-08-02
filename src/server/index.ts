@@ -232,7 +232,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: 'sequenceId is required' });
         return;
       }
-      const summary = stopSequence(sequenceId);
+      const summary = await stopSequence(sequenceId, { reverse: Boolean(body.reverse) }, log);
       sendJson(res, 200, { ok: true, ...summary });
       return;
     }

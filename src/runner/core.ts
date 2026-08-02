@@ -208,6 +208,35 @@ function rebuildPaper(file: RunnerFile): PaperAdapter {
   return venue;
 }
 
+// Build the venue adapter for a persisted sequence and read the current price.
+// Shared by cycleSequence and stopSequence so they agree on how each venue is
+// constructed (kraken / alpaca live, or the rebuilt paper simulator).
+async function buildVenue(
+  file: RunnerFile,
+  sequenceId: string,
+): Promise<{ venue: VenueAdapter; price: number }> {
+  if (file.venue === 'kraken') {
+    const venue = new KrakenAdapter({
+      symbol: file.symbol,
+      sequenceId,
+      sinceMs: Date.parse(file.createdAt) - 60 * 1000,
+    });
+    return { venue, price: await krakenPublicPrice(file.symbol) };
+  }
+  if (file.venue === 'alpaca') {
+    const venue = new AlpacaAdapter({
+      symbol: file.symbol,
+      assetType: file.assetType ?? 'stock',
+      paper: process.env.ALPACA_PAPER === 'true',
+    });
+    return { venue, price: await publicPrice(file.symbol, file.assetType ?? 'stock') };
+  }
+  const paper = rebuildPaper(file);
+  const price = await publicPrice(file.symbol, file.assetType ?? 'crypto');
+  paper.tick(price);
+  return { venue: paper, price };
+}
+
 function describeAction(action: EngineAction, id: string, log: Logger): void {
   if (action.type === 'placeOrder') {
     log(`${id}: place ${action.order.side} ${action.order.clientId} @ ${action.order.price ?? 'market'}`);
@@ -238,28 +267,7 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
     };
   }
 
-  let venue: VenueAdapter;
-  let price: number;
-  if (file.venue === 'kraken') {
-    venue = new KrakenAdapter({
-      symbol: file.symbol,
-      sequenceId,
-      sinceMs: Date.parse(file.createdAt) - 60 * 1000,
-    });
-    price = await krakenPublicPrice(file.symbol);
-  } else if (file.venue === 'alpaca') {
-    venue = new AlpacaAdapter({
-      symbol: file.symbol,
-      assetType: file.assetType ?? 'stock',
-      paper: process.env.ALPACA_PAPER === 'true',
-    });
-    price = await publicPrice(file.symbol, file.assetType ?? 'stock');
-  } else {
-    const paper = rebuildPaper(file);
-    price = await publicPrice(file.symbol, file.assetType ?? 'crypto');
-    paper.tick(price);
-    venue = paper;
-  }
+  const { venue, price } = await buildVenue(file, sequenceId);
 
   const snapshot = { openOrders: await venue.getOpenOrders(), fills: await venue.getFills() };
   const { actions, state } = reconcile(file.plan, file.state, snapshot);
@@ -298,33 +306,111 @@ export async function cycleAll(log: Logger = () => {}): Promise<CycleSummary[]> 
   return summaries;
 }
 
+export interface StopOptions {
+  /**
+   * When true, after canceling the open orders, market-sell the position
+   * built so far (the "reverse trades" option in the Tradingale dashboard):
+   * sum of filled buys minus anything already sold. Default false keeps the
+   * accumulated position sitting in your account.
+   */
+  reverse?: boolean;
+}
+
 export interface StopSummary {
   sequenceId: string;
   venue: 'paper' | 'kraken' | 'alpaca';
   phase: string;
+  canceledOrders: number;
+  reversed: boolean;
+  reversedQuantity: number;
   warning: string | null;
 }
 
 /**
- * Mark a sequence halted. Deliberately cancels NOTHING at the venue: real
- * orders stay on the book until you cancel them on Kraken yourself.
+ * Stop a running sequence, mirroring the Tradingale dashboard cancel:
+ *  - always cancels the open orders at the venue (the resting limit buys and
+ *    the one active sell);
+ *  - with { reverse: true }, additionally market-sells the accumulated
+ *    position to exit completely. Without it, the position is kept.
+ * Idempotent client ids mean a failed run can be retried safely.
  */
-export function stopSequence(sequenceId: string): StopSummary {
+export async function stopSequence(
+  sequenceId: string,
+  options: StopOptions = {},
+  log: Logger = () => {},
+): Promise<StopSummary> {
   const file = loadRun(sequenceId);
   if (!file) throw new Error(`unknown sequence ${sequenceId}`);
-  if (file.state.phase === 'running') {
-    file.state.phase = 'halted';
-    file.state.haltReason = 'stopped by operator; open orders were not canceled';
-    saveRun(file, sequenceId);
+  if (file.state.phase !== 'running') {
+    return {
+      sequenceId,
+      venue: file.venue,
+      phase: file.state.phase,
+      canceledOrders: 0,
+      reversed: false,
+      reversedQuantity: 0,
+      warning: `sequence is ${file.state.phase}, not running`,
+    };
   }
+
+  const { venue, price } = await buildVenue(file, sequenceId);
+
+  // 1. Cancel every open order at the venue (idempotent, tolerant of a
+  //    single failure so one bad id does not block the rest).
+  const open = await venue.getOpenOrders();
+  let canceledOrders = 0;
+  for (const order of open) {
+    try {
+      await venue.cancelOrder(order.clientId);
+      canceledOrders++;
+      log(`${sequenceId}: cancel ${order.clientId}`);
+    } catch (error) {
+      log(`${sequenceId}: cancel ${order.clientId} failed: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  // 2. Optional reverse: market-sell the net position (filled buys - sells).
+  let reversed = false;
+  let reversedQuantity = 0;
+  if (options.reverse) {
+    const fills = await venue.getFills();
+    const bought = fills.filter((f) => f.side === 'buy').reduce((sum, f) => sum + f.quantity, 0);
+    const sold = fills.filter((f) => f.side === 'sell').reduce((sum, f) => sum + f.quantity, 0);
+    reversedQuantity = bought - sold;
+    if (reversedQuantity > 0) {
+      await venue.placeOrder({
+        clientId: `${sequenceId}-reverse`,
+        side: 'sell',
+        type: 'market',
+        quantity: reversedQuantity,
+        level: file.state.deepestFilledLevel,
+      });
+      reversed = true;
+      log(`${sequenceId}: reverse market-sell ${reversedQuantity}`);
+    } else {
+      log(`${sequenceId}: nothing accumulated, nothing to reverse`);
+    }
+  }
+
+  file.state.phase = 'canceled';
+  file.state.haltReason = options.reverse
+    ? reversed
+      ? `stopped by operator; position reversed (market sold ${reversedQuantity})`
+      : 'stopped by operator; no position to reverse'
+    : 'stopped by operator; open orders canceled, position kept';
+  file.lastPrice = price;
+  file.lastCycleAt = new Date().toISOString();
+  if (venue instanceof PaperAdapter) file.paperFills = await venue.getFills();
+  saveRun(file, sequenceId);
+
   return {
     sequenceId,
     venue: file.venue,
-    phase: file.state.phase,
-    warning:
-      file.venue === 'kraken'
-        ? 'Stopping cancels nothing at the venue: cancel your open orders on Kraken yourself.'
-        : null,
+    phase: 'canceled',
+    canceledOrders,
+    reversed,
+    reversedQuantity,
+    warning: null,
   };
 }
 

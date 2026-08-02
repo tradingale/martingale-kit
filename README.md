@@ -56,11 +56,15 @@ git clone https://github.com/tradingale/martingale-kit && cd martingale-kit && n
 export TRADINGALE_TOKEN=...   # tradingale.com/settings/api
 
 npm run runner -- start --symbol BTC --budget 5000   # freezes the plan, places the paper entry
-npm run runner -- watch                              # reconciles every 10 minutes
+npm run runner -- watch                              # reconciles on a schedule
 npm run runner -- status                             # where every sequence stands
+npm run runner -- stop <id>                          # cancel open orders, keep the position
+npm run runner -- stop <id> --reverse                # cancel AND market-sell the position
 ```
 
-- Crypto AND US stocks both run in paper: crypto prices come from public exchange tickers, stock prices from a free delayed feed (about 15 minutes; fine for a 10-minute reconciliation loop, and disclosed here on purpose). Live mode routes by asset class: Kraken carries crypto (KRAKEN_API_KEY / KRAKEN_API_SECRET), Alpaca carries US stocks (ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY; set ALPACA_PAPER=true to point the same rail at Alpaca's paper environment). Stock sequences refuse to start while the US market is closed, stock day orders are re-placed automatically after expiry, and your keys never leave your deployment.
+Stop mirrors the Tradingale dashboard: `stop <id>` cancels the resting buys and the active sell but keeps whatever you have accumulated; add `--reverse` to also market-sell that position and exit completely. Get the `<id>` from `status`.
+
+- Crypto AND US stocks both run in paper: crypto prices come from public exchange tickers, stock prices from a free delayed feed (delayed, and disclosed here on purpose; fine for the reconciliation loop). Live mode routes by asset class: Kraken carries crypto (KRAKEN_API_KEY / KRAKEN_API_SECRET), Alpaca carries US stocks (ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY; set ALPACA_PAPER=true to point the same rail at Alpaca's paper environment). Stock sequences refuse to start while the US market is closed, stock day orders are re-placed automatically after expiry, and your keys never leave your deployment.
 - The plan is persisted to `.martingale-runner/` before anything is placed (atomic writes); a crash or reboot resumes by replaying the file, exactly like the handbook says.
 - Underfunded ladders are refused with the computed `budget_min` instead of being silently distorted.
 - Live execution on Kraken ships in-repo (`src/adapters/kraken.ts`) behind the explicit `--live` flag, off by default. It requires `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` (trade-only permission, never withdrawal, IP allowlisting) and places REAL orders on your account. Even paper mode snaps ladders to the real Kraken grids when they can be fetched, so paper plans match what live would submit.
@@ -117,7 +121,7 @@ Build me a runner on top of the kit:
    docs, following the handbook's per-venue notes (grids, rate limits, key
    hygiene: trade-only permission, no withdrawal, IP allowlist). Keep it
    behind an explicit --live flag that defaults OFF.
-5. Schedule the reconciliation loop every 10 minutes with an overlap guard.
+5. Schedule the reconciliation loop on a schedule with an overlap guard.
 ```
 
 The agent writes a thin adapter instead of a whole engine. The engine part is already here, tested.

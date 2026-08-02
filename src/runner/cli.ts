@@ -9,15 +9,17 @@
 //   npx tsx src/runner/cli.ts start --symbol BTC --budget 1000
 //   npx tsx src/runner/cli.ts start --symbol BTC --budget 1000 --live
 //   npx tsx src/runner/cli.ts cycle            # run one reconciliation pass
-//   npx tsx src/runner/cli.ts watch            # loop every 10 minutes
+//   npx tsx src/runner/cli.ts watch            # reconcile on a schedule
 //   npx tsx src/runner/cli.ts status
+//   npx tsx src/runner/cli.ts stop <sequenceId>            # cancel open orders, keep the position
+//   npx tsx src/runner/cli.ts stop <sequenceId> --reverse  # cancel AND market-sell the position
 //
 // Env: TRADINGALE_TOKEN (required). --live additionally requires
 // KRAKEN_API_KEY and KRAKEN_API_SECRET and places REAL orders on your
 // Kraken account: your keys, your account, your sole responsibility.
 // The runner refuses underfunded ladders (budgetMin) instead of placing a
 // distorted one, per the handbook.
-import { CYCLE_MS, cycleAll, startSequence, statusAll } from './core.js';
+import { CYCLE_MS, cycleAll, startSequence, statusAll, stopSequence } from './core.js';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -48,7 +50,7 @@ async function cmdCycle(): Promise<void> {
 }
 
 async function cmdWatch(): Promise<void> {
-  log(`watching (every ${CYCLE_MS / 60000} min, Ctrl+C to stop)`);
+  log('watching (Ctrl+C to stop)');
   // Overlap guard: a plain sequential loop cannot overlap itself.
   for (;;) {
     try {
@@ -68,10 +70,26 @@ async function cmdStatus(): Promise<void> {
   }
 }
 
+async function cmdStop(): Promise<void> {
+  const id = process.argv[3];
+  if (!id || id.startsWith('--')) {
+    console.error('usage: runner stop <sequenceId> [--reverse]   (get the id from `runner status`)');
+    process.exit(1);
+  }
+  const reverse = process.argv.includes('--reverse');
+  const s = await stopSequence(id, { reverse }, log);
+  const tail = reverse
+    ? s.reversed
+      ? `, reversed ${s.reversedQuantity} at market`
+      : ', nothing to reverse'
+    : ', position kept';
+  log(`stopped ${id}: canceled ${s.canceledOrders} order(s)${tail}`);
+}
+
 const cmd = process.argv[2];
-const run = { start: cmdStart, cycle: cmdCycle, watch: cmdWatch, status: cmdStatus }[cmd ?? ''];
+const run = { start: cmdStart, cycle: cmdCycle, watch: cmdWatch, status: cmdStatus, stop: cmdStop }[cmd ?? ''];
 if (!run) {
-  console.log('usage: runner <start|cycle|watch|status> [--symbol BTC] [--budget 1000] [--live]');
+  console.log('usage: runner <start|cycle|watch|status|stop> [--symbol BTC] [--budget 1000] [--live] [--reverse]');
   process.exit(1);
 }
 run().catch((e) => {
