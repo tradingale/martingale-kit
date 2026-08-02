@@ -294,8 +294,12 @@ ${banner}
     if (seq.phase === 'running') {
       var stopBtn = el('button', 'stop', 'Stop');
       stopBtn.type = 'button';
-      stopBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, card); });
+      stopBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, false); });
       chips.appendChild(stopBtn);
+      var reverseBtn = el('button', 'stop', 'Stop + reverse');
+      reverseBtn.type = 'button';
+      reverseBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, true); });
+      chips.appendChild(reverseBtn);
     }
     head.appendChild(chips);
     card.appendChild(head);
@@ -388,15 +392,21 @@ ${banner}
       .then(function () { btn.disabled = false; });
   });
 
-  function stopSequence(id, card) {
-    if (!window.confirm('Stop ' + id + '? Nothing is canceled at the venue. If it runs live, cancel your open orders on Kraken yourself.')) return;
+  function stopSequence(id, reverse) {
+    var msg = reverse
+      ? 'Stop ' + id + ' AND market-sell your position? This cancels the open orders and sells everything you have accumulated, at market, to exit completely.'
+      : 'Stop ' + id + '? This cancels the open orders and KEEPS the position you have accumulated.';
+    if (!window.confirm(msg)) return;
     fetch('/api/stop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sequenceId: id }),
+      body: JSON.stringify({ sequenceId: id, reverse: reverse }),
     })
       .then(function (res) { return res.json(); })
       .then(function (body) {
+        if (body.reversed) window.alert('Reversed: market-sold ' + body.reversedQuantity + '. Orders canceled: ' + body.canceledOrders + '.');
+        else if (reverse) window.alert('Nothing accumulated to reverse. Orders canceled: ' + body.canceledOrders + '.');
+        else window.alert('Stopped. Orders canceled: ' + body.canceledOrders + '. Position kept.');
         if (body.warning) window.alert(body.warning);
         refresh();
       })
