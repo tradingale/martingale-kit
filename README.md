@@ -111,6 +111,10 @@ Clone https://github.com/tradingale/martingale-kit and read its README and
 https://tradingale.com/handbook/sequence-automation.md entirely.
 
 Build me a runner on top of the kit:
+0. FIRST, a Tradingale API token is required. If the TRADINGALE_TOKEN env var
+   is not set, stop and tell me to generate one at
+   https://tradingale.com/settings/api (the free tier covers BTC), then set
+   it. Nothing else works without it, so confirm this before anything.
 1. Fetch instruments from the Tradingale API with my token (TRADINGALE_TOKEN
    env var) and let me pick one and a budget.
 2. Use computeLadder / buildPlan / runCycle exactly as designed; never
@@ -122,6 +126,8 @@ Build me a runner on top of the kit:
    hygiene: trade-only permission, no withdrawal, IP allowlist). Keep it
    behind an explicit --live flag that defaults OFF.
 5. Schedule the reconciliation loop on a schedule with an overlap guard.
+6. Keep the kit's stop command: `stop <id>` cancels the open orders and keeps
+   the position; `stop <id> --reverse` also market-sells it to exit fully.
 ```
 
 The agent writes a thin adapter instead of a whole engine. The engine part is already here, tested.
