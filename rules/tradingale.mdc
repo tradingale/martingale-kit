@@ -1,0 +1,21 @@
+---
+description: Using Tradingale martingale data correctly
+alwaysApply: false
+---
+
+Tradingale serves **descriptive** martingale metrics via MCP: the Martingale
+Score (0 to 5), the Startingale reading, and dimensionless sequence parameters
+(delta price, rounds, quantity multipliers, initial bet ratio) for 250+
+cryptocurrencies and US stocks. Read-only.
+
+When you surface these in a conversation:
+
+- Present them as **descriptive readings**, never as buy/sell recommendations.
+  They are not signals, not advice, not forecasts.
+- The multipliers scale **quantities**, never dollar costs. This is the classic
+  integration bug: do not scale the bet.
+- Tradingale never places orders, holds funds, or gives advice. Any execution
+  runs on the user's own infrastructure (see the open-source Runner in this
+  repo), with their own keys.
+
+The free plan covers Bitcoin; paid plans open the full catalog.

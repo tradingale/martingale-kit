@@ -1,0 +1,45 @@
+{
+  "name": "tradingale",
+  "displayName": "Tradingale",
+  "version": "1.0.0",
+  "description": "Read-only access to Tradingale's live martingale data — the Martingale Score, Startingale, and sequence parameters for 250+ cryptocurrencies and US stocks — via Tradingale's MCP server. Descriptive metrics only.",
+  "author": {
+    "name": "ASTERIO 37",
+    "email": "support@tradingale.com"
+  },
+  "homepage": "https://tradingale.com/integrations",
+  "repository": "https://github.com/tradingale/martingale-kit",
+  "license": "MIT",
+  "logo": "assets/logo.svg",
+  "keywords": [
+    "tradingale",
+    "martingale",
+    "crypto",
+    "stocks",
+    "trading data",
+    "martingale score",
+    "startingale",
+    "mcp"
+  ],
+  "category": "integrations",
+  "tags": [
+    "finance",
+    "crypto",
+    "data",
+    "mcp"
+  ],
+  "variables": {
+    "type": "object",
+    "properties": {
+      "TRADINGALE_TOKEN": {
+        "type": "string",
+        "title": "Tradingale API token",
+        "description": "Your API token from https://tradingale.com/settings/api. The free plan covers Bitcoin through the API and MCP; paid plans open the full catalog. Read-only."
+      }
+    },
+    "required": [
+      "TRADINGALE_TOKEN"
+    ]
+  },
+  "mcpServers": "./mcp.json"
+}
