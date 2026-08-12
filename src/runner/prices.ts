@@ -30,7 +30,7 @@ export async function krakenPublicPrice(symbol: string): Promise<number> {
 
 /**
  * Stooq free CSV quote for US stocks (no key required, ~15 min delayed).
- * Delayed prices are fine for a paper runner reconciling every 10 minutes;
+ * Delayed prices are fine for a paper runner reconciling on a schedule;
  * the delay is disclosed in the README and the UI.
  */
 export async function stooqStockPrice(symbol: string): Promise<number> {

@@ -5,7 +5,7 @@
 //
 // Quotas are weighted monthly calls (Score Scout 5,000 personal use,
 // Martingale Maestro 50,000 commercial license). One /all call covers the
-// whole catalog; it refreshes about every 40 minutes, so poll gently.
+// whole catalog; the data is served live, so poll gently.
 
 import type { SequenceParams } from './types.js';
 

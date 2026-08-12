@@ -32,7 +32,15 @@ import {
   stopSequence,
 } from '../runner/core.js';
 import { publicPrice } from '../runner/prices.js';
+import { TradingaleClient, type TradingaleInstrument } from '../client.js';
+import { startingaleLabel } from '../runner/startingale.js';
+import { keysStatus, loadKeysIntoEnv } from '../runner/keystore.js';
 import { renderPage } from './page.js';
+
+// Load <RUNNER_STATE_DIR>/keys.env into the environment before anything reads
+// it. Never overrides a real env var, never carries RUNNER_MODE: live stays
+// decided by the real environment at launch.
+loadKeysIntoEnv();
 
 const PORT = Number(process.env.PORT ?? 8080);
 const MODE = runnerMode();
@@ -64,6 +72,54 @@ function cachedPrice(symbol: string): number | null {
       .finally(() => priceInflight.delete(symbol));
   }
   return hit ? hit.price : null;
+}
+
+// ---------------------------------------------------------------------------
+// Catalog: a scoreboard the browser can pick from, proxied through the server
+// so the TRADINGALE_TOKEN never reaches the browser. Startingale is returned
+// as a WORD (house rule), the score as a number. Cached briefly to be gentle
+// on the API. Whatever the token's plan scopes is what shows up (free = BTC).
+// ---------------------------------------------------------------------------
+
+interface CatalogRow {
+  symbol: string;
+  name: string;
+  score: number;
+  startingale: string;
+  assetType: 'crypto' | 'stock';
+}
+
+let catalogCache: { at: number; rows: CatalogRow[] } | null = null;
+const CATALOG_TTL_MS = 60 * 1000;
+
+function projectCatalog(list: TradingaleInstrument[], assetType: 'crypto' | 'stock'): CatalogRow[] {
+  return list
+    .filter((i) => i.martingaleScore !== undefined && i.symbol)
+    .map((i) => ({
+      symbol: String(i.symbol),
+      name: i.name ?? String(i.symbol),
+      score: Number(i.martingaleScore),
+      startingale: startingaleLabel(Number(i.startingale ?? 0)),
+      assetType,
+    }));
+}
+
+async function getCatalog(): Promise<CatalogRow[]> {
+  if (catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache.rows;
+  const token = process.env.TRADINGALE_TOKEN;
+  if (!token) throw new Error('Set TRADINGALE_TOKEN to load the catalog (tradingale.com/settings/api)');
+  const client = new TradingaleClient(token);
+  // A free-scope token returns only BTC (and no stocks); tolerate either
+  // side failing so the catalog still shows what the plan covers.
+  const [crypto, stocks] = await Promise.all([
+    client.crypto().catch(() => [] as TradingaleInstrument[]),
+    client.stocks().catch(() => [] as TradingaleInstrument[]),
+  ]);
+  const rows = [...projectCatalog(crypto, 'crypto'), ...projectCatalog(stocks, 'stock')].sort(
+    (a, b) => b.score - a.score,
+  );
+  catalogCache = { at: Date.now(), rows };
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +197,7 @@ function stateBody(): unknown {
     ok: true,
     mode: MODE,
     keysPresent: krakenKeysPresent(), // boolean only; the keys themselves are never served
+    keys: keysStatus(), // { tradingale, kraken, alpaca } booleans, never the values
     cycleMs: CYCLE_MS,
     now: new Date().toISOString(),
     sequences,
@@ -148,7 +205,7 @@ function stateBody(): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// The reconciliation loop: every 10 minutes, strictly sequential. The
+// The reconciliation loop: on a fixed schedule, strictly sequential. The
 // reentrancy guard means a slow pass is never overlapped by the next tick
 // (overlapping cycles are exactly how duplicate sells happen).
 // ---------------------------------------------------------------------------
@@ -202,6 +259,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (route === 'GET /api/catalog') {
+      const instruments = await getCatalog();
+      sendJson(res, 200, { ok: true, instruments });
+      return;
+    }
+
     if (route === 'POST /api/start') {
       if (startInFlight) {
         sendJson(res, 409, { ok: false, error: 'a start is already in progress, retry in a moment' });
@@ -251,7 +314,7 @@ server.listen(PORT, '0.0.0.0', () => {
     log('live mode without KRAKEN_API_KEY / KRAKEN_API_SECRET: starts will be refused until keys are set');
   }
   log(PASSWORD ? 'Basic Auth: enabled (RUNNER_PASSWORD)' : 'Basic Auth: DISABLED (set RUNNER_PASSWORD to guard this UI)');
-  log(`reconciliation loop: every ${CYCLE_MS / 60000} minutes, sequential`);
+  log('reconciliation loop: running on a schedule, sequential');
   // First pass shortly after boot (the healthcheck does not wait on it),
   // then the fixed interval with the reentrancy guard.
   setTimeout(() => void runCyclePass('boot'), 30 * 1000);

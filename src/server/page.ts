@@ -148,6 +148,27 @@ export function renderPage(mode: RunnerMode): string {
   .empty { color: var(--faint); font-size: 13px; padding: 8px 2px; }
   .foot { font-size: 10px; color: var(--faint); line-height: 1.6; border-top: 1px solid rgba(60, 231, 252, 0.1); padding: 10px 14px; }
   footer.page { font-size: 10px; color: var(--faint); line-height: 1.7; margin-top: 24px; }
+  /* Catalog scoreboard */
+  .cat-filter { background: var(--bg); color: var(--text); border: 1px solid rgba(60,231,252,0.25); border-radius: 8px; padding: 6px 10px; font-size: 13px; width: 200px; max-width: 55vw; outline: none; }
+  .cat-filter:focus { border-color: var(--cyan); }
+  .cat-note { font-size: 10px; color: var(--faint); margin-bottom: 8px; }
+  .cat-wrap { max-height: 320px; overflow-y: auto; border: 1px solid rgba(60,231,252,0.1); border-radius: 10px; }
+  table.cat { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.cat th { position: sticky; top: 0; background: var(--card); text-align: left; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 700; padding: 8px 10px; border-bottom: 1px solid rgba(60,231,252,0.15); }
+  table.cat th.cat-sort { cursor: pointer; color: var(--cyan); user-select: none; }
+  table.cat td { padding: 8px 10px; border-bottom: 1px solid rgba(60,231,252,0.06); }
+  table.cat tbody tr { cursor: pointer; }
+  table.cat tbody tr:hover { background: rgba(42,129,255,0.08); }
+  .cat-sym { font-weight: 800; }
+  .cat-score { font-weight: 800; }
+  .cat-tag { font-size: 8px; color: var(--faint); border: 1px solid rgba(100,116,139,0.4); border-radius: 5px; padding: 0 4px; margin-left: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .sg-strong { color: #4ade80; font-weight: 700; } .sg-favorable { color: #60a5fa; font-weight: 700; } .sg-moderate { color: #facc15; font-weight: 700; } .sg-misaligned { color: #f87171; font-weight: 700; }
+  .cat-empty { font-size: 12px; color: var(--faint); padding: 8px 2px; }
+  .keys-line { font-size: 11px; color: var(--muted); margin: -6px 0 16px; }
+  .keys-line b { color: var(--text); font-weight: 600; }
+  .k-ok { color: #4ade80; } .k-absent { color: var(--faint); }
+  .keys-hint { color: var(--faint); }
+  .keys-hint code { color: var(--cyan); }
 </style>
 </head>
 <body>
@@ -157,6 +178,21 @@ ${banner}
     <div class="logo"><span>Tradingale</span> Runner</div>
     <div class="top-meta" id="topMeta">loading state...</div>
   </header>
+  <div class="keys-line" id="keysLine"></div>
+
+  <div class="card">
+    <div class="card-head"><h2>Catalog</h2><input class="cat-filter" id="catFilter" placeholder="Filter symbol or name" autocomplete="off"></div>
+    <div class="card-body">
+      <div class="cat-note">Descriptive metrics, not advice. Click a row to load it into Start below.</div>
+      <div class="cat-wrap">
+        <table class="cat">
+          <thead><tr><th>Symbol</th><th>Name</th><th class="cat-sort" id="catSortScore">Score &#9662;</th><th>Startingale</th></tr></thead>
+          <tbody id="catBody"></tbody>
+        </table>
+      </div>
+      <div class="cat-empty" id="catEmpty">loading catalog...</div>
+    </div>
+  </div>
 
   <div class="card">
     <div class="card-head"><h2>Start a sequence</h2><span class="chip" id="modeChip"></span></div>
@@ -338,8 +374,9 @@ ${banner}
     chip.textContent = state.mode === 'live' ? 'LIVE mode' : 'paper mode (default)';
     var meta = 'mode ' + state.mode +
       (state.mode === 'live' ? (state.keysPresent ? ', Kraken keys detected' : ', Kraken keys MISSING') : '') +
-      ', reconciles every ' + Math.round(state.cycleMs / 60000) + ' min, refreshed ' + new Date().toLocaleTimeString();
+      ', refreshed ' + new Date().toLocaleTimeString();
     document.getElementById('topMeta').textContent = meta;
+    renderKeys(state.keys || {});
 
     var host = document.getElementById('sequences');
     host.textContent = '';
@@ -348,6 +385,76 @@ ${banner}
       return;
     }
     for (var i = 0; i < state.sequences.length; i++) host.appendChild(renderSequence(state.sequences[i]));
+  }
+
+  function renderKeys(keys) {
+    var line = document.getElementById('keysLine');
+    line.textContent = '';
+    function part(label, ok) {
+      var span = el('span');
+      span.appendChild(el('b', null, label + ': '));
+      span.appendChild(el('span', ok ? 'k-ok' : 'k-absent', ok ? 'configured ✓' : 'absent'));
+      return span;
+    }
+    line.appendChild(part('Tradingale token', !!keys.tradingale));
+    line.appendChild(document.createTextNode('  ·  '));
+    line.appendChild(part('Kraken', !!keys.kraken));
+    line.appendChild(document.createTextNode('  ·  '));
+    line.appendChild(part('Alpaca', !!keys.alpaca));
+    var hint = el('span', 'keys-hint');
+    hint.appendChild(document.createTextNode('  — set them with '));
+    hint.appendChild(el('code', null, 'npm run runner -- keys'));
+    line.appendChild(hint);
+  }
+
+  var CATALOG = [];
+  var catSortDesc = true;
+
+  function sgClass(word) { return 'sg-' + String(word).toLowerCase(); }
+
+  function renderCatalog() {
+    var body = document.getElementById('catBody');
+    var empty = document.getElementById('catEmpty');
+    var q = (document.getElementById('catFilter').value || '').trim().toLowerCase();
+    var rows = CATALOG.filter(function (r) {
+      return !q || r.symbol.toLowerCase().indexOf(q) >= 0 || String(r.name || '').toLowerCase().indexOf(q) >= 0;
+    });
+    rows.sort(function (a, b) { return catSortDesc ? b.score - a.score : a.score - b.score; });
+    body.textContent = '';
+    if (!rows.length) {
+      empty.textContent = CATALOG.length ? 'No match.' : 'Catalog empty (check your Tradingale token and plan scope).';
+      return;
+    }
+    empty.textContent = '';
+    rows.forEach(function (r) {
+      var tr = document.createElement('tr');
+      var tdSym = el('td', 'cat-sym mono');
+      tdSym.textContent = r.symbol;
+      if (r.assetType === 'stock') tdSym.appendChild(el('span', 'cat-tag', 'stock'));
+      tr.appendChild(tdSym);
+      tr.appendChild(el('td', null, r.name || r.symbol));
+      tr.appendChild(el('td', 'cat-score mono', Number(r.score).toFixed(2)));
+      tr.appendChild(el('td', sgClass(r.startingale), r.startingale));
+      tr.addEventListener('click', function () { pickInstrument(r.symbol); });
+      body.appendChild(tr);
+    });
+  }
+
+  function pickInstrument(symbol) {
+    document.getElementById('symbol').value = symbol;
+    showMsg('ok', symbol + ' loaded below. Set a budget and Start.');
+    document.getElementById('startForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.getElementById('budget').focus();
+  }
+
+  function fetchCatalog() {
+    fetch('/api/catalog', { headers: { 'Accept': 'application/json' } })
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (body && body.ok && body.instruments) { CATALOG = body.instruments; renderCatalog(); }
+        else { document.getElementById('catEmpty').textContent = (body && body.error) || 'Catalog unavailable.'; }
+      })
+      .catch(function () { document.getElementById('catEmpty').textContent = 'Catalog unavailable (server unreachable).'; });
   }
 
   function refresh() {
@@ -413,8 +520,17 @@ ${banner}
       .catch(function () { window.alert('stop failed: server unreachable'); });
   }
 
+  document.getElementById('catFilter').addEventListener('input', renderCatalog);
+  document.getElementById('catSortScore').addEventListener('click', function () {
+    catSortDesc = !catSortDesc;
+    this.textContent = 'Score ' + (catSortDesc ? '▾' : '▴');
+    renderCatalog();
+  });
+
   refresh();
   setInterval(refresh, 30000);
+  fetchCatalog();
+  setInterval(fetchCatalog, 5 * 60000);
 })();
 </script>
 </body>

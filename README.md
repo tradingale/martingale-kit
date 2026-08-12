@@ -71,17 +71,40 @@ Stop mirrors the Tradingale dashboard: `stop <id>` cancels the resting buys and 
 
 ## The web runner
 
-The same runner, as a small web app: one `node:http` server hosts the status UI and runs the 10-minute reconciliation loop in the same process.
+The same runner, as a small web app: one `node:http` server hosts the UI and runs the reconciliation loop in the same process.
 
 ```bash
-export TRADINGALE_TOKEN=...       # tradingale.com/settings/api
+export TRADINGALE_TOKEN=...       # tradingale.com/settings/api  (or: npm run runner -- keys)
 npm run server                    # paper by default, http://localhost:8080
 ```
 
-- The page shows each sequence as the Tradingale price ladder (model buy level, model exit level, outcome if reached) plus phase, level reached, budget, last price and venue. It refreshes every 30 seconds.
-- `RUNNER_MODE=live` switches to the Kraken adapter, shows a permanent red banner, and refuses to start sequences while keys are missing. Paper mode shows an amber "Simulated" banner.
-- Stopping a sequence halts the loop for it and cancels NOTHING at the venue: cancel your open orders on Kraken yourself.
+- **Catalog picker.** The page shows a scoreboard of your instruments — symbol, name, Martingale Score, and Startingale as a word (Strong / Favorable / Moderate / Misaligned) — sortable by score and filterable. Click a row to load it into the Start form. The scoreboard is proxied through the server, so your `TRADINGALE_TOKEN` never reaches the browser. Whatever your plan scopes is what shows (free = BTC).
+- **Key status.** A line reports whether the Tradingale token and the Kraken / Alpaca keys are configured — presence only, never the values — with the command to set them.
+- Each sequence renders as the Tradingale price ladder (model buy level, model exit level, outcome if reached) plus phase, level reached, budget, last price and venue. It refreshes on a short interval.
+- `RUNNER_MODE=live` switches to the live adapters, shows a permanent red banner, and refuses to start while keys are missing. Paper mode shows an amber "Simulated" banner.
+- **Stop** on a running sequence cancels the resting buys and the active sell; **Stop + reverse** also market-sells the accumulated position to exit completely (mirrors the Tradingale dashboard).
 - Set `RUNNER_PASSWORD` to put the whole server behind Basic Auth.
+
+## Going live
+
+Live mode places REAL orders on your own exchange account. Two deliberate guardrails:
+
+1. **Live is decided only by the environment at launch** (`RUNNER_MODE=live`). Nothing in the UI or a config file can flip paper -> live.
+2. **Your keys never leave your machine.** They are read from the environment or from a local `.martingale-runner/keys.env` (chmod 600), never logged, never returned by any API, never shown once saved.
+
+Configure keys with the guided command instead of exporting env vars by hand:
+
+```bash
+npm run runner -- keys      # hidden prompts; writes .martingale-runner/keys.env (0600)
+```
+
+It stores your Tradingale token and, for live, your exchange keys. Then relaunch in live mode:
+
+```bash
+RUNNER_MODE=live npm run server      # crypto -> Kraken, US stocks -> Alpaca
+```
+
+**Key hygiene, non-negotiable:** create exchange keys **trade-only, never with withdrawal permission**, and **IP-allowlist** them to your machine or your Railway egress. The runner refuses underfunded ladders (it surfaces `budget_min`) rather than placing a distorted one.
 
 ## Deploy on Railway
 
@@ -95,7 +118,8 @@ Variables:
 | --- | --- | --- |
 | `TRADINGALE_TOKEN` | yes | Model parameters token, from [tradingale.com/settings/api](https://tradingale.com/settings/api). |
 | `RUNNER_MODE` | no | `paper` (default) or `live`. Live places real orders on your Kraken account. |
-| `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` | live only | Create them trade-only (no withdrawal) and IP-allowlisted. Read from env, never logged, never served. |
+| `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` | live crypto | Create them trade-only (no withdrawal) and IP-allowlisted. Read from env, never logged, never served. |
+| `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` | live US stocks | Same hygiene. `ALPACA_PAPER=true` points the rail at Alpaca's paper environment. |
 | `RUNNER_PASSWORD` | recommended | Basic Auth for the whole UI. Without it the page is open to anyone who finds the URL. |
 | `RUNNER_STATE_DIR` | recommended | Mount a [Railway volume](https://docs.railway.com/volumes) and point this at it (e.g. `/data`). Containers are ephemeral: without a volume, a redeploy forgets your sequence files. In live mode your orders would keep resting on Kraken with nothing reconciling them. |
 | `PORT` | auto | Injected by Railway. |
