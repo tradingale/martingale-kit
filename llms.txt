@@ -1,0 +1,43 @@
+# martingale-kit — context for AI agents
+
+What this is: the open-source Tradingale Runner (a self-hosted martingale
+sequence bot) plus the tested engine it runs on. Tradingale itself is a data
+provider: it serves descriptive metrics and never places orders, holds funds,
+or gives advice. Execution happens HERE, on the user's machine, with their keys.
+
+Stack: Node >= 18, TypeScript strict, ESM ("type": "module"), zero runtime
+dependencies (node:http server, no frameworks). Run TS directly with tsx via
+the npm scripts. Tests: vitest.
+
+Commands (always through npm, note the `--` separator):
+  npm install
+  npm run runner -- start --symbol BTC --budget 5000   # paper by default
+  npm run runner -- watch | status | cycle
+  npm run runner -- stop <id> [--reverse]              # cancel; --reverse also market-sells
+  npm run runner -- keys                               # guided key setup -> .martingale-runner/keys.env (0600)
+  npm run server                                       # web UI on PORT (default 8080)
+  npm test && npm run typecheck
+
+Env: TRADINGALE_TOKEN (required, from https://tradingale.com/settings/api;
+free tier covers BTC). RUNNER_MODE=live is decided ONLY by the environment at
+launch — nothing else can escalate paper to live. Live keys: KRAKEN_API_KEY/
+KRAKEN_API_SECRET (crypto), ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY (US
+stocks; ALPACA_PAPER=true targets Alpaca's paper env). Optional:
+RUNNER_PASSWORD (Basic Auth), RUNNER_STATE_DIR (persistent state dir).
+
+Tradingale API shape (do not guess it):
+  GET https://tradingale.com/api/martingale/crypto?symbol=BTC
+  GET https://tradingale.com/api/martingale/stocks?symbol=AAPL
+  Header: Authorization: Bearer <TRADINGALE_TOKEN>
+  Response: { "data": [ { "symbol", "name", "delta_price", "nb_rounds",
+  "multipliers", "initial_bet_ratio", "martingale_score", "startingale" } ] }
+  (no top-level "success" field on these endpoints; calls are quota-weighted)
+
+Engine invariants (violating these is THE classic integration bug):
+  - multipliers scale QUANTITIES between levels, never dollar costs
+  - a sequence plan is FROZEN at birth; nothing is recomputed later
+  - exactly one sell order is active at a time (cancel, verify, then place)
+  - underfunded ladders are refused with budgetMin, never distorted
+
+Wording rules when building on this: the metrics are descriptive, never
+signals/advice/forecasts; simulated results must be labeled simulated.

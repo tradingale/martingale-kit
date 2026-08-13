@@ -159,6 +159,8 @@ Build me a runner on top of the kit:
 
 The agent writes a thin adapter instead of a whole engine. The engine part is already here, tested.
 
+Working with a smaller model or a bare local LLM? Point it at [`llms.txt`](llms.txt) first: ten dense lines with the stack, the exact commands, the real API response shape, and the engine invariants — everything a model tends to guess wrong.
+
 ## Where the data comes from
 
 The model parameters (`delta_price`, `nb_rounds`, `multipliers`, `initial_bet_ratio`, plus the Martingale Score and Startingale metrics) are served by Tradingale, identically for every subscriber, through the [REST API](https://tradingale.com/settings/api) and an [MCP server](https://tradingale.com/docs/mcp-setup) for AI agents. Plans: [tradingale.com/pricing](https://tradingale.com/pricing). The engineering background lives in the [Sequence Automation Handbook](https://tradingale.com/handbook/sequence-automation.md), and the model's own simulated track record is public at [tradingale.com/performance](https://tradingale.com/performance).
