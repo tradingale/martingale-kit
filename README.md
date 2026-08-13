@@ -124,6 +124,7 @@ Variables:
 | `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` | live US stocks | Same hygiene. `ALPACA_PAPER=true` points the rail at Alpaca's paper environment. |
 | `RUNNER_PASSWORD` | recommended | Basic Auth for the whole UI. Without it the page is open to anyone who finds the URL. |
 | `RUNNER_STATE_DIR` | recommended | Mount a [Railway volume](https://docs.railway.com/volumes) and point this at it (e.g. `/data`). Containers are ephemeral: without a volume, a redeploy forgets your sequence files. In live mode your orders would keep resting on Kraken with nothing reconciling them. |
+| `CATALOG_REFRESH_MINUTES` | no | How often the dashboard's catalog refetches Tradingale data (default 120, min 10). Each refresh spends a few weighted calls of your monthly plan quota; the default keeps an always-open dashboard well within a Score Scout plan, with headroom for your own tooling. Refresh faster only if you want to spend more of your quota. |
 | `PORT` | auto | Injected by Railway. |
 
 The deploy config lives in `railway.json` (start command `npm run server`, healthcheck `GET /api/state`). Note for live mode on any hosted box: Kraken API keys can be IP-allowlisted only if your egress IP is stable; hosted containers usually are not, so weigh that against running the runner at home.

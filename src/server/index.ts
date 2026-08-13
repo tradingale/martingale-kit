@@ -97,10 +97,16 @@ const CATALOG_PRICE_PREFETCH = 15;
 
 // Scores move slowly; prices move fast. The UI polls /api/catalog every
 // minute, but that only re-merges LIVE PRICES from the local price cache —
-// the Tradingale data itself is refetched at most once per CATALOG_TTL_MS,
-// so an always-open tab stays a rounding error on the monthly quota.
+// the Tradingale data itself is refetched at most once per CATALOG_TTL_MS.
+//
+// Each data refresh spends a few WEIGHTED calls of the monthly plan quota,
+// so the default (120 min) keeps an always-open dashboard well under half a
+// Score Scout plan, leaving headroom for the user's own tooling (alerts,
+// scripts). CATALOG_REFRESH_MINUTES overrides it: refresh faster and you
+// consciously spend more of your quota. Clamped to >= 10.
 let catalogCache: { at: number; rows: CatalogRow[] } | null = null;
-const CATALOG_TTL_MS = 30 * 60 * 1000;
+const CATALOG_REFRESH_MINUTES = Math.max(10, Number(process.env.CATALOG_REFRESH_MINUTES ?? 120) || 120);
+const CATALOG_TTL_MS = CATALOG_REFRESH_MINUTES * 60 * 1000;
 
 function projectCatalog(list: TradingaleInstrument[], assetType: 'crypto' | 'stock'): CatalogRow[] {
   return list
