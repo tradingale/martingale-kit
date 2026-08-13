@@ -49,8 +49,10 @@ export function loadRun(sequenceId: string): RunnerFile | null {
 }
 
 export function listRuns(): string[] {
+  // The state dir also holds non-sequence files (settings.json, keys.env):
+  // only files shaped like a sequence id (SYMBOL-timestamp) are runs.
   return fs
     .readdirSync(runnerDir())
-    .filter((f) => f.endsWith('.json'))
+    .filter((f) => /^[A-Z0-9]{1,12}-\d+\.json$/.test(f))
     .map((f) => f.replace(/\.json$/, ''));
 }

@@ -149,6 +149,8 @@ export function renderPage(mode: RunnerMode): string {
   .foot { font-size: 10px; color: var(--faint); line-height: 1.6; border-top: 1px solid rgba(60, 231, 252, 0.1); padding: 10px 14px; }
   footer.page { font-size: 10px; color: var(--faint); line-height: 1.7; margin-top: 24px; }
   /* Catalog scoreboard */
+  button.tab { background: transparent; color: var(--muted); border: 1px solid rgba(60,231,252,0.25); border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  button.tab.active { color: #04101f; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-color: transparent; }
   .cat-filter { background: var(--bg); color: var(--text); border: 1px solid rgba(60,231,252,0.25); border-radius: 8px; padding: 6px 10px; font-size: 13px; width: 200px; max-width: 55vw; outline: none; }
   .cat-filter:focus { border-color: var(--cyan); }
   .cat-note { font-size: 10px; color: var(--faint); margin-bottom: 8px; }
@@ -181,9 +183,16 @@ ${banner}
   <div class="keys-line" id="keysLine"></div>
 
   <div class="card">
-    <div class="card-head"><h2>Catalog</h2><input class="cat-filter" id="catFilter" placeholder="Filter symbol or name" autocomplete="off"></div>
+    <div class="card-head">
+      <h2>Scoreboard</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="tab active" id="tabCryptos" type="button">Cryptos</button>
+        <button class="tab" id="tabStocks" type="button">Stocks</button>
+        <input class="cat-filter" id="catFilter" placeholder="Filter symbol or name" autocomplete="off">
+      </div>
+    </div>
     <div class="card-body">
-      <div class="cat-note">Descriptive metrics, not advice. Click a row to load it into Start below.</div>
+      <div class="cat-note">Descriptive metrics, not advice. Click a row to view its sequence at your budget.</div>
       <div class="cat-wrap">
         <table class="cat">
           <thead><tr><th>Symbol</th><th>Name</th><th class="cat-sort" id="catSortScore">Score &#9662;</th><th>Startingale</th><th>Live price</th></tr></thead>
@@ -194,22 +203,43 @@ ${banner}
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-head"><h2>Start a sequence</h2><span class="chip" id="modeChip"></span></div>
+  <div class="card" id="previewCard" style="display:none">
+    <div class="card-head">
+      <h2 id="pvTitle">Sequence preview</h2>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap" id="pvChips"></div>
+    </div>
     <div class="card-body">
       <form class="controls" id="startForm">
         <div class="field"><label for="symbol">Symbol</label><input id="symbol" value="BTC" autocomplete="off"></div>
         <div class="field"><label for="budget">Budget (USD)</label><input id="budget" value="1000" inputmode="decimal" autocomplete="off"></div>
-        <button class="primary" id="startBtn" type="submit">Start</button>
+        <button class="tab" id="pvRefresh" type="button">Preview</button>
+        <button class="primary" id="startBtn" type="submit">Start this sequence</button>
       </form>
       <div class="msg" id="startMsg"></div>
+      <div id="pvMeta" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+      <div class="ladder" id="pvLadder" style="margin-top:14px"></div>
       <p style="margin-top:10px;font-size:10px;color:var(--faint)">
+        Descriptive model structure at the capital shown. Outcomes are arithmetic, before fees and slippage. Not investment advice.
         The runner refuses underfunded ladders and surfaces the computed budget floor instead of placing a distorted one.
       </p>
     </div>
   </div>
 
   <div id="sequences"></div>
+
+  <div class="card">
+    <div class="card-head"><h2>Settings</h2><span class="chip" id="modeChip"></span></div>
+    <div class="card-body">
+      <form class="controls" id="settingsForm">
+        <div class="field"><label for="cycleMin">Reconciliation interval (minutes)</label><input id="cycleMin" inputmode="numeric" autocomplete="off" style="width:170px"></div>
+        <button class="primary" id="settingsBtn" type="submit">Save</button>
+      </form>
+      <div class="msg" id="settingsMsg"></div>
+      <p style="margin-top:10px;font-size:10px;color:var(--faint)">
+        How often the runner reconciles open sequences with the venue (orders and public prices). It does not change your Tradingale data usage.
+      </p>
+    </div>
+  </div>
 
   <div class="card">
     <div class="card-head"><h2>API keys</h2><span class="chip">write-only</span></div>
@@ -395,6 +425,9 @@ ${banner}
   }
 
   function render(state) {
+    lastState = state;
+    var cyc = document.getElementById('cycleMin');
+    if (cyc && document.activeElement !== cyc) cyc.value = String(Math.round(state.cycleMs / 60000));
     var chip = document.getElementById('modeChip');
     chip.textContent = state.mode === 'live' ? 'LIVE mode' : 'paper mode (default)';
     var meta = 'mode ' + state.mode +
@@ -434,14 +467,31 @@ ${banner}
 
   var CATALOG = [];
   var catSortDesc = true;
+  var activeTab = 'crypto';
+  var lastState = null;
 
   function sgClass(word) { return 'sg-' + String(word).toLowerCase(); }
+
+  function setTab(tab) {
+    activeTab = tab;
+    document.getElementById('tabCryptos').className = 'tab' + (tab === 'crypto' ? ' active' : '');
+    document.getElementById('tabStocks').className = 'tab' + (tab === 'stock' ? ' active' : '');
+    renderCatalog();
+  }
+
+  function tabCounts() {
+    var c = 0, s = 0;
+    CATALOG.forEach(function (r) { if (r.assetType === 'stock') s++; else c++; });
+    document.getElementById('tabCryptos').textContent = 'Cryptos (' + c + ')';
+    document.getElementById('tabStocks').textContent = 'Stocks (' + s + ')';
+  }
 
   function renderCatalog() {
     var body = document.getElementById('catBody');
     var empty = document.getElementById('catEmpty');
     var q = (document.getElementById('catFilter').value || '').trim().toLowerCase();
     var rows = CATALOG.filter(function (r) {
+      if ((r.assetType === 'stock' ? 'stock' : 'crypto') !== activeTab) return false;
       return !q || r.symbol.toLowerCase().indexOf(q) >= 0 || String(r.name || '').toLowerCase().indexOf(q) >= 0;
     });
     rows.sort(function (a, b) { return catSortDesc ? b.score - a.score : a.score - b.score; });
@@ -455,7 +505,6 @@ ${banner}
       var tr = document.createElement('tr');
       var tdSym = el('td', 'cat-sym mono');
       tdSym.textContent = r.symbol;
-      if (r.assetType === 'stock') tdSym.appendChild(el('span', 'cat-tag', 'stock'));
       tr.appendChild(tdSym);
       tr.appendChild(el('td', null, r.name || r.symbol));
       tr.appendChild(el('td', 'cat-score mono', Number(r.score).toFixed(2)));
@@ -466,27 +515,70 @@ ${banner}
     });
   }
 
-  function pickInstrument(symbol, assetType) {
+  function pickInstrument(symbol) {
     document.getElementById('symbol').value = symbol;
-    showMsg('ok', symbol + ' loaded below. Fetching live price...');
-    document.getElementById('startForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    document.getElementById('budget').focus();
-    fetch('/api/price?symbol=' + encodeURIComponent(symbol) + '&assetType=' + encodeURIComponent(assetType || 'crypto'))
-      .then(function (res) { return res.json(); })
-      .then(function (body) {
-        if (body && body.ok) {
-          showMsg('ok', symbol + ' loaded. Live price $' + fmtPrice(body.price) + '. Set a budget and Start.');
-          renderCatalog();
-        } else showMsg('ok', symbol + ' loaded below. Set a budget and Start.');
+    document.getElementById('previewCard').style.display = '';
+    document.getElementById('previewCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    loadPreview();
+  }
+
+  var previewTimer = null;
+  function loadPreview() {
+    var symbol = (document.getElementById('symbol').value || '').trim().toUpperCase();
+    var budget = Number(document.getElementById('budget').value);
+    if (!symbol) return;
+    document.getElementById('pvTitle').textContent = symbol + ' sequence preview';
+    document.getElementById('pvMeta').textContent = 'computing the model structure at your budget...';
+    fetch('/api/preview?symbol=' + encodeURIComponent(symbol) + '&budget=' + encodeURIComponent(budget))
+      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
+      .then(function (r) {
+        if (!(r.ok && r.body.ok)) {
+          document.getElementById('pvMeta').textContent = (r.body && r.body.error) || 'preview failed';
+          document.getElementById('pvLadder').textContent = '';
+          document.getElementById('pvChips').textContent = '';
+          return;
+        }
+        renderPreview(r.body.preview);
       })
-      .catch(function () { showMsg('ok', symbol + ' loaded below. Set a budget and Start.'); });
+      .catch(function () { document.getElementById('pvMeta').textContent = 'preview failed: server unreachable'; });
+  }
+
+  function renderPreview(p) {
+    var chips = document.getElementById('pvChips');
+    chips.textContent = '';
+    document.getElementById('pvTitle').textContent = p.symbol + ' — ' + (p.name || p.symbol);
+    chips.appendChild(el('span', 'chip mono', 'Score ' + (p.martingaleScore !== undefined ? Number(p.martingaleScore).toFixed(2) : '?')));
+    chips.appendChild(el('span', 'chip', p.assetType));
+    chips.appendChild(el('span', 'chip mono', 'entry $' + fmtPrice(p.entryPrice)));
+
+    var meta = document.getElementById('pvMeta');
+    if (p.problems && p.problems.length) {
+      meta.textContent = 'Refused as-is (budget_min ~$' + p.budgetMin + '): ' + p.problems.join('; ');
+      meta.style.color = '#fda4af';
+    } else {
+      meta.textContent = 'Budget $' + fmtPrice(p.budget) + ' (floor ~$' + p.budgetMin + '), ' + p.levels.length + ' levels, live entry $' + fmtPrice(p.entryPrice) + '. Review the ladder, then Start.';
+      meta.style.color = '';
+    }
+
+    var fake = { deltaPrice: p.deltaPrice, deepestFilledLevel: 0, levels: p.levels, budget: p.budget };
+    var host = document.getElementById('pvLadder');
+    host.textContent = '';
+    for (var i = 0; i < p.levels.length; i++) host.appendChild(renderLevel(fake, p.levels[i], i));
+
+    // Live-mode key guard: surface the missing key before the user hits Start.
+    if (lastState && lastState.mode === 'live' && lastState.keys) {
+      var needs = p.assetType === 'stock' ? !lastState.keys.alpaca : !lastState.keys.kraken;
+      if (needs) {
+        showMsg('err', 'Live mode: configure your ' + (p.assetType === 'stock' ? 'Alpaca' : 'Kraken') + ' keys first (API keys card below), then Start.');
+      }
+    }
   }
 
   function fetchCatalog() {
     fetch('/api/catalog', { headers: { 'Accept': 'application/json' } })
       .then(function (res) { return res.json(); })
       .then(function (body) {
-        if (body && body.ok && body.instruments) { CATALOG = body.instruments; renderCatalog(); }
+        if (body && body.ok && body.instruments) { CATALOG = body.instruments; tabCounts(); renderCatalog(); }
         else { document.getElementById('catEmpty').textContent = (body && body.error) || 'Catalog unavailable.'; }
       })
       .catch(function () { document.getElementById('catEmpty').textContent = 'Catalog unavailable (server unreachable).'; });
@@ -590,6 +682,29 @@ ${banner}
     catSortDesc = !catSortDesc;
     this.textContent = 'Score ' + (catSortDesc ? '▾' : '▴');
     renderCatalog();
+  });
+  document.getElementById('tabCryptos').addEventListener('click', function () { setTab('crypto'); });
+  document.getElementById('tabStocks').addEventListener('click', function () { setTab('stock'); });
+  document.getElementById('pvRefresh').addEventListener('click', loadPreview);
+  document.getElementById('budget').addEventListener('input', function () {
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(loadPreview, 600);
+  });
+  document.getElementById('symbol').addEventListener('change', loadPreview);
+
+  document.getElementById('settingsForm').addEventListener('submit', function (event) {
+    event.preventDefault();
+    var box = document.getElementById('settingsMsg');
+    var minutes = Number(document.getElementById('cycleMin').value);
+    fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cycleMinutes: minutes }) })
+      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
+      .then(function (r) {
+        box.className = 'msg ' + (r.ok && r.body.ok ? 'ok' : 'err');
+        box.textContent = r.ok && r.body.ok
+          ? 'Saved: reconciling every ' + Math.round(r.body.cycleMs / 60000) + ' min.'
+          : ((r.body && r.body.error) || 'save failed');
+      })
+      .catch(function () { box.className = 'msg err'; box.textContent = 'save failed: server unreachable'; });
   });
 
   refresh();

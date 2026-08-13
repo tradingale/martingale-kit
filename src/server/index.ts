@@ -26,11 +26,15 @@ import {
   CYCLE_MS,
   cycleAll,
   krakenKeysPresent,
+  previewSequence,
   runnerMode,
   startSequence,
   statusAll,
   stopSequence,
 } from '../runner/core.js';
+import { runnerDir } from '../runner/state.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import { publicPrice } from '../runner/prices.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import { startingaleLabel } from '../runner/startingale.js';
@@ -127,9 +131,11 @@ async function getCatalog(): Promise<CatalogRow[]> {
   const client = new TradingaleClient(token);
   // A free-scope token returns only BTC (and no stocks); tolerate either
   // side failing so the catalog still shows what the plan covers.
+  // The API paginates (default limit 50): ask for the whole catalog so the
+  // picker shows every instrument the plan scopes, like the site scoreboard.
   const [crypto, stocks] = await Promise.all([
-    client.crypto().catch(() => [] as TradingaleInstrument[]),
-    client.stocks().catch(() => [] as TradingaleInstrument[]),
+    client.crypto({ limit: 500 }).catch(() => [] as TradingaleInstrument[]),
+    client.stocks({ limit: 500 }).catch(() => [] as TradingaleInstrument[]),
   ]);
   const rows = [...projectCatalog(crypto, 'crypto'), ...projectCatalog(stocks, 'stock')].sort(
     (a, b) => b.score - a.score,
@@ -224,7 +230,7 @@ function stateBody(): unknown {
     mode: MODE,
     keysPresent: krakenKeysPresent(), // boolean only; the keys themselves are never served
     keys: keysStatus(), // { tradingale, kraken, alpaca } booleans, never the values
-    cycleMs: CYCLE_MS,
+    cycleMs,
     now: new Date().toISOString(),
     sequences,
   };
@@ -235,6 +241,33 @@ function stateBody(): unknown {
 // reentrancy guard means a slow pass is never overlapped by the next tick
 // (overlapping cycles are exactly how duplicate sells happen).
 // ---------------------------------------------------------------------------
+
+// The venue reconciliation interval is adjustable from the dashboard
+// (settings.json in the state dir, so it survives restarts). It only paces
+// venue/public-price work — the Tradingale data budget is CATALOG_TTL_MS,
+// untouched by this. Clamped to >= 1 minute.
+const SETTINGS_FILE = path.join(runnerDir(), 'settings.json');
+function loadCycleMs(): number {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8')) as { cycleMinutes?: number };
+    const minutes = Number(parsed.cycleMinutes);
+    if (Number.isFinite(minutes) && minutes >= 1) return Math.round(minutes * 60 * 1000);
+  } catch {
+    /* no settings yet */
+  }
+  return CYCLE_MS;
+}
+let cycleMs = loadCycleMs();
+let cycleTimer: ReturnType<typeof setInterval> | null = null;
+function armCycleTimer(): void {
+  if (cycleTimer) clearInterval(cycleTimer);
+  cycleTimer = setInterval(() => void runCyclePass('interval'), cycleMs);
+}
+function setCycleMinutes(minutes: number): void {
+  cycleMs = Math.round(Math.max(1, minutes) * 60 * 1000);
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ cycleMinutes: cycleMs / 60000 }, null, 2));
+  armCycleTimer();
+}
 
 let cycling = false;
 async function runCyclePass(reason: string): Promise<void> {
@@ -288,6 +321,27 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /api/catalog') {
       const instruments = catalogWithPrices(await getCatalog());
       sendJson(res, 200, { ok: true, instruments });
+      return;
+    }
+
+    if (route === 'GET /api/preview') {
+      const symbol = String(url.searchParams.get('symbol') ?? '');
+      const budget = Number(url.searchParams.get('budget') ?? NaN);
+      const preview = await previewSequence(symbol, budget);
+      sendJson(res, 200, { ok: true, preview });
+      return;
+    }
+
+    if (route === 'POST /api/settings') {
+      const body = await readJsonBody(req);
+      const minutes = Number(body.cycleMinutes);
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 24 * 60) {
+        sendJson(res, 400, { ok: false, error: 'cycleMinutes must be between 1 and 1440' });
+        return;
+      }
+      setCycleMinutes(minutes);
+      log(`reconciliation interval set to ${Math.round(minutes)} min from the dashboard`);
+      sendJson(res, 200, { ok: true, cycleMs });
       return;
     }
 
@@ -390,7 +444,7 @@ server.listen(PORT, '0.0.0.0', () => {
   // First pass shortly after boot (the healthcheck does not wait on it),
   // then the fixed interval with the reentrancy guard.
   setTimeout(() => void runCyclePass('boot'), 30 * 1000);
-  setInterval(() => void runCyclePass('interval'), CYCLE_MS);
+  armCycleTimer();
 });
 
 function shutdown(signal: string): void {

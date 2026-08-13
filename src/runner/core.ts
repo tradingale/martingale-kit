@@ -58,6 +58,77 @@ export interface StartSummary {
   startingale?: number;
 }
 
+export interface SequencePreview {
+  symbol: string;
+  name?: string;
+  assetType: 'crypto' | 'stock';
+  martingaleScore?: number;
+  startingale?: number;
+  entryPrice: number;
+  budget: number;
+  budgetMin: number;
+  problems: string[];
+  deltaPrice: number;
+  levels: LadderLevel[];
+}
+
+/**
+ * The site flow, dry: resolve the instrument, take the live entry price,
+ * compute the ladder at the requested budget, and report budgetMin/grid
+ * problems — WITHOUT placing or persisting anything. The web UI renders
+ * this as the sequence preview the user inspects before pressing Start.
+ * Paper-basis grids (best effort), same arithmetic as the site.
+ */
+export async function previewSequence(symbolRaw: string, budgetRaw: number): Promise<SequencePreview> {
+  const token = process.env.TRADINGALE_TOKEN;
+  if (!token) throw new Error('Set TRADINGALE_TOKEN (create one at tradingale.com/settings/api)');
+  const symbol = symbolRaw.trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,12}$/.test(symbol)) throw new Error(`Invalid symbol: ${symbolRaw}`);
+  const budget = Number(budgetRaw);
+  if (!Number.isFinite(budget) || budget <= 0) throw new Error('budget must be a positive number');
+
+  const client = new TradingaleClient(token);
+  let assetType: 'crypto' | 'stock' = 'crypto';
+  let instruments = await client.crypto({ symbol });
+  if (!instruments[0]) {
+    instruments = await client.stocks({ symbol }).catch(() => []);
+    if (instruments[0]) assetType = 'stock';
+  }
+  const instrument = instruments[0];
+  if (!instrument) throw new Error(`No fresh Tradingale data for ${symbol} (check your plan's scope)`);
+  if (!Number.isFinite(instrument.initialBetRatio)) {
+    throw new Error(`Tradingale did not return initial_bet_ratio for ${symbol}`);
+  }
+
+  let grids = NULL_GRIDS;
+  let hasGrids = false;
+  try {
+    grids = assetType === 'crypto' ? await fetchKrakenGrids(symbol) : NULL_GRIDS;
+    hasGrids = assetType === 'crypto';
+  } catch {
+    grids = NULL_GRIDS;
+  }
+  const entry = await publicPrice(symbol, assetType);
+  const floor = budgetMin(instrument, entry, grids);
+  const ladder = computeLadder(instrument, budget, entry, hasGrids ? grids : undefined);
+  const problems = checkLadderAgainstGrids(ladder, grids);
+  if (budget < floor) problems.unshift(`budget below the computed floor (~$${Math.ceil(floor)})`);
+
+  return {
+    symbol,
+    name: instrument.name,
+    assetType,
+    martingaleScore: instrument.martingaleScore,
+    startingale: instrument.startingale,
+    entryPrice: entry,
+    budget,
+    budgetMin: Math.ceil(floor),
+    problems,
+    deltaPrice: instrument.deltaPrice,
+    levels: ladder.levels,
+  };
+}
+
 export async function startSequence(options: StartOptions, log: Logger = () => {}): Promise<StartSummary> {
   const token = process.env.TRADINGALE_TOKEN;
   if (!token) throw new Error('Set TRADINGALE_TOKEN (create one at tradingale.com/settings/api)');
