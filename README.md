@@ -78,6 +78,9 @@ export TRADINGALE_TOKEN=...       # tradingale.com/settings/api  (or: npm run ru
 npm run server                    # paper by default, http://localhost:8080
 ```
 
+- **Three pages.** A nav switches between **Scoreboard** (pick an instrument, preview its sequence, start it), **Dashboard** (your running sequences), and **Keys & settings**. Key status lives on its own page, not scattered.
+- **Custom sequences.** Tick "Edit the structure myself" under the preview to set your own spacing, number of rounds, and quantity multipliers, exactly like the site's custom sequences. The preview recomputes live and every guardrail still applies (budget floor, grid checks); leave it off to use Tradingale's structure.
+- **Refresh button** on the scoreboard refetches scores and prices on demand (data refreshes cost weighted API calls, so they are user-triggered).
 - **Catalog picker.** The page shows a scoreboard of your instruments — symbol, name, Martingale Score, Startingale as a word (Strong / Favorable / Moderate / Misaligned), and the live public price (top rows prefetched, the rest on click) — sortable by score and filterable. Click a row to load it into the Start form with its live price. The scoreboard is proxied through the server, so your `TRADINGALE_TOKEN` never reaches the browser. Whatever your plan scopes is what shows (free = BTC). Prices come from public tickers (crypto: Binance with a Kraken fallback; stocks: a free delayed feed), no keys needed — and once Alpaca keys are configured, US stock prices upgrade automatically to Alpaca's live data.
 - **Key status.** A line reports whether the Tradingale token and the Kraken / Alpaca keys are configured — presence only, never the values — with the command to set them.
 - Each sequence renders as the Tradingale price ladder (model buy level, model exit level, outcome if reached) plus phase, level reached, budget, last price and venue. It refreshes on a short interval.

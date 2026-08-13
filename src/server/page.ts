@@ -166,6 +166,9 @@ export function renderPage(mode: RunnerMode): string {
   .cat-tag { font-size: 8px; color: var(--faint); border: 1px solid rgba(100,116,139,0.4); border-radius: 5px; padding: 0 4px; margin-left: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
   .sg-strong { color: #4ade80; font-weight: 700; } .sg-favorable { color: #60a5fa; font-weight: 700; } .sg-moderate { color: #facc15; font-weight: 700; } .sg-misaligned { color: #f87171; font-weight: 700; }
   .cat-empty { font-size: 12px; color: var(--faint); padding: 8px 2px; }
+  nav.nav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .nav-tab { background: rgba(15,23,42,0.6); color: var(--muted); border: 1px solid rgba(60,231,252,0.2); border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .nav-tab.active { color: #04101f; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-color: transparent; }
   .keys-line { font-size: 11px; color: var(--muted); margin: -6px 0 16px; }
   .keys-line b { color: var(--text); font-weight: 600; }
   .k-ok { color: #4ade80; } .k-absent { color: var(--faint); }
@@ -180,8 +183,14 @@ ${banner}
     <div class="logo"><span>Tradingale</span> Runner</div>
     <div class="top-meta" id="topMeta">loading state...</div>
   </header>
-  <div class="keys-line" id="keysLine"></div>
 
+  <nav class="nav">
+    <button class="nav-tab active" id="navScoreboard" type="button">Scoreboard</button>
+    <button class="nav-tab" id="navDashboard" type="button">Dashboard</button>
+    <button class="nav-tab" id="navKeys" type="button">Keys &amp; settings</button>
+  </nav>
+
+  <section id="pageScoreboard">
   <div class="card">
     <div class="card-head">
       <h2>Scoreboard</h2>
@@ -189,6 +198,7 @@ ${banner}
         <button class="tab active" id="tabCryptos" type="button">Cryptos</button>
         <button class="tab" id="tabStocks" type="button">Stocks</button>
         <input class="cat-filter" id="catFilter" placeholder="Filter symbol or name" autocomplete="off">
+        <button class="tab" id="catRefresh" type="button" title="Refetch scores and prices">&#8635; Refresh</button>
       </div>
     </div>
     <div class="card-body">
@@ -215,6 +225,23 @@ ${banner}
         <button class="tab" id="pvRefresh" type="button">Preview</button>
         <button class="primary" id="startBtn" type="submit">Start this sequence</button>
       </form>
+
+      <div style="margin-top:12px;border-top:1px solid rgba(60,231,252,0.12);padding-top:12px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer">
+          <input type="checkbox" id="customToggle"> Edit the structure myself (custom sequence)
+        </label>
+        <div id="customFields" style="display:none;margin-top:10px">
+          <div class="controls">
+            <div class="field"><label for="cDelta">Delta price (%)</label><input id="cDelta" inputmode="decimal" autocomplete="off" style="width:110px"></div>
+            <div class="field"><label for="cRounds">Rounds</label><input id="cRounds" inputmode="numeric" autocomplete="off" style="width:90px"></div>
+            <div class="field" style="flex:1"><label for="cMult">Multipliers (comma separated, quantities)</label><input id="cMult" autocomplete="off" style="width:100%;min-width:200px"></div>
+            <button class="tab" id="cReset" type="button">Reset to Tradingale</button>
+          </div>
+          <p style="margin-top:8px;font-size:10px;color:var(--faint)">
+            Multipliers set how QUANTITIES grow from one level to the next, never the amount spent; the deeper levels are then scaled together so the whole budget is deployed. The same guardrails apply: an underfunded custom ladder is refused with its budget floor.
+          </p>
+        </div>
+      </div>
       <div class="msg" id="startMsg"></div>
       <div id="pvMeta" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
       <div class="ladder" id="pvLadder" style="margin-top:14px"></div>
@@ -225,7 +252,14 @@ ${banner}
     </div>
   </div>
 
-  <div id="sequences"></div>
+  </section>
+
+  <section id="pageDashboard" style="display:none">
+    <div id="sequences"></div>
+  </section>
+
+  <section id="pageKeys" style="display:none">
+  <div class="keys-line" id="keysLine"></div>
 
   <div class="card">
     <div class="card-head"><h2>Settings</h2><span class="chip" id="modeChip"></span></div>
@@ -265,6 +299,7 @@ ${banner}
       </p>
     </div>
   </div>
+  </section>
 
   <footer class="page">
     <p>Descriptive model structure at the capital shown. Outcomes are arithmetic, before fees and slippage. Not investment advice; you alone decide and execute on your own exchange.</p>
@@ -523,13 +558,39 @@ ${banner}
   }
 
   var previewTimer = null;
+
+  // Custom structure (site parity): only sent when the user opted in.
+  function customQuery() {
+    if (!document.getElementById('customToggle').checked) return '';
+    var q = '';
+    var d = Number(document.getElementById('cDelta').value);
+    var r = Number(document.getElementById('cRounds').value);
+    var m = (document.getElementById('cMult').value || '').trim();
+    if (Number.isFinite(d) && d > 0) q += '&deltaPrice=' + encodeURIComponent(d / 100); // UI is %, engine is a fraction
+    if (Number.isFinite(r) && r >= 2) q += '&nbRounds=' + encodeURIComponent(r);
+    if (m) q += '&multipliers=' + encodeURIComponent(m.replace(/\\s+/g, ''));
+    return q;
+  }
+
+  function customBody() {
+    if (!document.getElementById('customToggle').checked) return undefined;
+    var d = Number(document.getElementById('cDelta').value);
+    var r = Number(document.getElementById('cRounds').value);
+    var m = (document.getElementById('cMult').value || '').trim();
+    var out = {};
+    if (Number.isFinite(d) && d > 0) out.deltaPrice = d / 100;
+    if (Number.isFinite(r) && r >= 2) out.nbRounds = r;
+    if (m) out.multipliers = m.split(',').map(Number).filter(function (n) { return Number.isFinite(n) && n > 0; });
+    return Object.keys(out).length ? out : undefined;
+  }
+
   function loadPreview() {
     var symbol = (document.getElementById('symbol').value || '').trim().toUpperCase();
     var budget = Number(document.getElementById('budget').value);
     if (!symbol) return;
     document.getElementById('pvTitle').textContent = symbol + ' sequence preview';
     document.getElementById('pvMeta').textContent = 'computing the model structure at your budget...';
-    fetch('/api/preview?symbol=' + encodeURIComponent(symbol) + '&budget=' + encodeURIComponent(budget))
+    fetch('/api/preview?symbol=' + encodeURIComponent(symbol) + '&budget=' + encodeURIComponent(budget) + customQuery())
       .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
       .then(function (r) {
         if (!(r.ok && r.body.ok)) {
@@ -550,6 +611,15 @@ ${banner}
     chips.appendChild(el('span', 'chip mono', 'Score ' + (p.martingaleScore !== undefined ? Number(p.martingaleScore).toFixed(2) : '?')));
     chips.appendChild(el('span', 'chip', p.assetType));
     chips.appendChild(el('span', 'chip mono', 'entry $' + fmtPrice(p.entryPrice)));
+    if (p.custom) chips.appendChild(el('span', 'chip', 'custom structure'));
+
+    // Mirror the structure actually used into the custom fields, so opening
+    // the editor starts from Tradingale's values instead of blanks.
+    if (p.params && !document.getElementById('customToggle').checked) {
+      document.getElementById('cDelta').value = (p.params.deltaPrice * 100).toFixed(2);
+      document.getElementById('cRounds').value = String(p.params.nbRounds);
+      document.getElementById('cMult').value = p.params.multipliers.join(',');
+    }
 
     var meta = document.getElementById('pvMeta');
     if (p.problems && p.problems.length) {
@@ -574,8 +644,8 @@ ${banner}
     }
   }
 
-  function fetchCatalog() {
-    fetch('/api/catalog', { headers: { 'Accept': 'application/json' } })
+  function fetchCatalog(force) {
+    return fetch('/api/catalog' + (force ? '?refresh=1' : ''), { headers: { 'Accept': 'application/json' } })
       .then(function (res) { return res.json(); })
       .then(function (body) {
         if (body && body.ok && body.instruments) { CATALOG = body.instruments; tabCounts(); renderCatalog(); }
@@ -610,6 +680,7 @@ ${banner}
       body: JSON.stringify({
         symbol: document.getElementById('symbol').value,
         budget: Number(document.getElementById('budget').value),
+        custom: customBody(),
       }),
     })
       .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
@@ -683,6 +754,41 @@ ${banner}
     this.textContent = 'Score ' + (catSortDesc ? '▾' : '▴');
     renderCatalog();
   });
+  function showPage(name) {
+    var pages = { scoreboard: 'pageScoreboard', dashboard: 'pageDashboard', keys: 'pageKeys' };
+    var navs = { scoreboard: 'navScoreboard', dashboard: 'navDashboard', keys: 'navKeys' };
+    Object.keys(pages).forEach(function (k) {
+      document.getElementById(pages[k]).style.display = k === name ? '' : 'none';
+      document.getElementById(navs[k]).className = 'nav-tab' + (k === name ? ' active' : '');
+    });
+  }
+  document.getElementById('navScoreboard').addEventListener('click', function () { showPage('scoreboard'); });
+  document.getElementById('navDashboard').addEventListener('click', function () { showPage('dashboard'); });
+  document.getElementById('navKeys').addEventListener('click', function () { showPage('keys'); });
+
+  document.getElementById('catRefresh').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    document.getElementById('catEmpty').textContent = 'refreshing scores and prices...';
+    fetchCatalog(true).then(function () { btn.disabled = false; });
+  });
+
+  document.getElementById('customToggle').addEventListener('change', function () {
+    document.getElementById('customFields').style.display = this.checked ? '' : 'none';
+    if (!this.checked) loadPreview();
+  });
+  document.getElementById('cReset').addEventListener('click', function () {
+    document.getElementById('customToggle').checked = false;
+    document.getElementById('customFields').style.display = 'none';
+    loadPreview();
+  });
+  ['cDelta', 'cRounds', 'cMult'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', function () {
+      if (previewTimer) clearTimeout(previewTimer);
+      previewTimer = setTimeout(loadPreview, 700);
+    });
+  });
+
   document.getElementById('tabCryptos').addEventListener('click', function () { setTab('crypto'); });
   document.getElementById('tabStocks').addEventListener('click', function () { setTab('stock'); });
   document.getElementById('pvRefresh').addEventListener('click', loadPreview);

@@ -13,7 +13,7 @@ import { PaperAdapter } from '../adapters/paper.js';
 import { KrakenAdapter, fetchKrakenGrids } from '../adapters/kraken.js';
 import { AlpacaAdapter } from '../adapters/alpaca.js';
 import type { VenueAdapter } from '../adapters/types.js';
-import { TradingaleClient } from '../client.js';
+import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import type { Fill, LadderLevel, VenueGrids } from '../types.js';
 import { krakenPublicPrice, publicPrice } from './prices.js';
 import { listRuns, loadRun, saveRun, type RunnerFile } from './state.js';
@@ -44,6 +44,8 @@ export interface StartOptions {
   symbol: string;
   budget: number;
   mode: RunnerMode;
+  /** Optional custom structure, exactly as previewed. */
+  custom?: CustomParams;
 }
 
 export interface StartSummary {
@@ -58,6 +60,43 @@ export interface StartSummary {
   startingale?: number;
 }
 
+/**
+ * Optional overrides of the model structure, mirroring the site's custom
+ * sequences: edit the spacing, the number of rounds, and the per-level
+ * quantity multipliers. Anything omitted keeps Tradingale's value for the
+ * instrument. The multipliers array must hold nbRounds - 1 entries; the
+ * ladder math and every guardrail (budgetMin, grid checks) apply exactly
+ * the same way to a custom structure.
+ */
+export interface CustomParams {
+  deltaPrice?: number;
+  nbRounds?: number;
+  multipliers?: number[];
+}
+
+function applyCustom(base: TradingaleInstrument, custom?: CustomParams): TradingaleInstrument {
+  if (!custom) return base;
+  const merged: TradingaleInstrument = { ...base };
+  if (Number.isFinite(custom.deltaPrice) && (custom.deltaPrice as number) > 0) {
+    merged.deltaPrice = custom.deltaPrice as number;
+  }
+  if (Number.isFinite(custom.nbRounds) && (custom.nbRounds as number) >= 2) {
+    merged.nbRounds = Math.floor(custom.nbRounds as number);
+  }
+  if (Array.isArray(custom.multipliers) && custom.multipliers.length > 0) {
+    const cleaned = custom.multipliers.map(Number).filter((m) => Number.isFinite(m) && m > 0);
+    if (cleaned.length > 0) merged.multipliers = cleaned;
+  }
+  // The engine needs exactly nbRounds - 1 multipliers: pad with the last
+  // value, or trim, so a user editing one field alone still gets a valid
+  // structure instead of an error.
+  const need = Math.max(0, merged.nbRounds - 1);
+  const list = [...merged.multipliers];
+  while (list.length < need) list.push(list[list.length - 1] ?? 2);
+  merged.multipliers = list.slice(0, need);
+  return merged;
+}
+
 export interface SequencePreview {
   symbol: string;
   name?: string;
@@ -70,6 +109,10 @@ export interface SequencePreview {
   problems: string[];
   deltaPrice: number;
   levels: LadderLevel[];
+  /** The structure actually used (Tradingale's, or the user's edits). */
+  params: { deltaPrice: number; nbRounds: number; multipliers: number[]; initialBetRatio: number };
+  /** True when the preview used custom values instead of Tradingale's. */
+  custom: boolean;
 }
 
 /**
@@ -79,7 +122,11 @@ export interface SequencePreview {
  * this as the sequence preview the user inspects before pressing Start.
  * Paper-basis grids (best effort), same arithmetic as the site.
  */
-export async function previewSequence(symbolRaw: string, budgetRaw: number): Promise<SequencePreview> {
+export async function previewSequence(
+  symbolRaw: string,
+  budgetRaw: number,
+  custom?: CustomParams,
+): Promise<SequencePreview> {
   const token = process.env.TRADINGALE_TOKEN;
   if (!token) throw new Error('Set TRADINGALE_TOKEN (create one at tradingale.com/settings/api)');
   const symbol = symbolRaw.trim().toUpperCase();
@@ -94,11 +141,12 @@ export async function previewSequence(symbolRaw: string, budgetRaw: number): Pro
     instruments = await client.stocks({ symbol }).catch(() => []);
     if (instruments[0]) assetType = 'stock';
   }
-  const instrument = instruments[0];
-  if (!instrument) throw new Error(`No fresh Tradingale data for ${symbol} (check your plan's scope)`);
-  if (!Number.isFinite(instrument.initialBetRatio)) {
+  const base = instruments[0];
+  if (!base) throw new Error(`No fresh Tradingale data for ${symbol} (check your plan's scope)`);
+  if (!Number.isFinite(base.initialBetRatio)) {
     throw new Error(`Tradingale did not return initial_bet_ratio for ${symbol}`);
   }
+  const instrument = applyCustom(base, custom);
 
   let grids = NULL_GRIDS;
   let hasGrids = false;
@@ -116,16 +164,23 @@ export async function previewSequence(symbolRaw: string, budgetRaw: number): Pro
 
   return {
     symbol,
-    name: instrument.name,
+    name: base.name,
     assetType,
-    martingaleScore: instrument.martingaleScore,
-    startingale: instrument.startingale,
+    martingaleScore: base.martingaleScore,
+    startingale: base.startingale,
     entryPrice: entry,
     budget,
     budgetMin: Math.ceil(floor),
     problems,
     deltaPrice: instrument.deltaPrice,
     levels: ladder.levels,
+    params: {
+      deltaPrice: instrument.deltaPrice,
+      nbRounds: instrument.nbRounds,
+      multipliers: instrument.multipliers,
+      initialBetRatio: instrument.initialBetRatio,
+    },
+    custom: Boolean(custom && (custom.deltaPrice || custom.nbRounds || custom.multipliers)),
   };
 }
 
@@ -147,11 +202,14 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     instruments = await client.stocks({ symbol }).catch(() => []);
     if (instruments[0]) assetType = 'stock';
   }
-  const instrument = instruments[0];
-  if (!instrument) throw new Error(`No fresh Tradingale data for ${symbol} (check your plan's scope)`);
-  if (!Number.isFinite(instrument.initialBetRatio)) {
+  const baseInstrument = instruments[0];
+  if (!baseInstrument) throw new Error(`No fresh Tradingale data for ${symbol} (check your plan's scope)`);
+  if (!Number.isFinite(baseInstrument.initialBetRatio)) {
     throw new Error(`Tradingale did not return initial_bet_ratio for ${symbol}`);
   }
+  // Custom structures (edited spacing / rounds / multipliers) go through the
+  // exact same math and guardrails as Tradingale's own parameters.
+  const instrument = applyCustom(baseInstrument, options.custom);
 
   const sequenceId = `${symbol}-${Date.now()}`;
 

@@ -35,7 +35,7 @@ import {
 import { runnerDir } from '../runner/state.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { publicPrice } from '../runner/prices.js';
+import { bulkCryptoPrices, bulkStockPrices, publicPrice } from '../runner/prices.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import { startingaleLabel } from '../runner/startingale.js';
 import { KEY_VARS, keysStatus, loadKeysIntoEnv, writeKeys, type KeyVar } from '../runner/keystore.js';
@@ -95,9 +95,31 @@ interface CatalogRow {
   price?: number | null;
 }
 
-// Bounded prefetch: warm the price cache for the top rows only, so the
-// catalog shows live prices without hammering the public tickers.
-const CATALOG_PRICE_PREFETCH = 15;
+// Prices for the WHOLE catalog come from bulk snapshots (two public calls
+// for crypto, one Alpaca call for stocks when keys exist), refreshed on
+// their own short interval — no per-symbol fan-out.
+const CATALOG_PRICE_TTL_MS = 60 * 1000;
+let catalogPrices = new Map<string, number>();
+let catalogPricesAt = 0;
+let catalogPricesInflight = false;
+
+function refreshCatalogPrices(rows: CatalogRow[]): void {
+  if (catalogPricesInflight || Date.now() - catalogPricesAt < CATALOG_PRICE_TTL_MS) return;
+  catalogPricesInflight = true;
+  const cryptos = rows.filter((r) => r.assetType === 'crypto').map((r) => r.symbol);
+  const stocks = rows.filter((r) => r.assetType === 'stock').map((r) => r.symbol);
+  Promise.all([bulkCryptoPrices(cryptos), bulkStockPrices(stocks)])
+    .then(([c, s]) => {
+      const merged = new Map<string, number>(c);
+      for (const [k, v] of s) merged.set(k, v);
+      catalogPrices = merged;
+      catalogPricesAt = Date.now();
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      catalogPricesInflight = false;
+    });
+}
 
 // Scores move slowly; prices move fast. The UI polls /api/catalog every
 // minute, but that only re-merges LIVE PRICES from the local price cache —
@@ -148,9 +170,10 @@ async function getCatalog(): Promise<CatalogRow[]> {
 // rows in the background (cachedPrice triggers the fetch and returns null
 // until it lands; the UI polls, so prices fill in within seconds).
 function catalogWithPrices(rows: CatalogRow[]): CatalogRow[] {
-  return rows.map((row, i) => ({
+  refreshCatalogPrices(rows); // background; serves what is already known
+  return rows.map((row) => ({
     ...row,
-    price: i < CATALOG_PRICE_PREFETCH ? cachedPrice(row.symbol, row.assetType) : (priceCache.get(row.symbol)?.price ?? null),
+    price: catalogPrices.get(row.symbol) ?? priceCache.get(row.symbol)?.price ?? null,
   }));
 }
 
@@ -319,15 +342,32 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === 'GET /api/catalog') {
+      // ?refresh=1 forces both the data and the price snapshots (the
+      // dashboard's Refresh button). Data still costs weighted API calls,
+      // so it is user-triggered, never automatic.
+      if (url.searchParams.get('refresh') === '1') {
+        catalogCache = null;
+        catalogPricesAt = 0;
+      }
       const instruments = catalogWithPrices(await getCatalog());
-      sendJson(res, 200, { ok: true, instruments });
+      sendJson(res, 200, { ok: true, instruments, pricesAt: catalogPricesAt || null });
       return;
     }
 
     if (route === 'GET /api/preview') {
       const symbol = String(url.searchParams.get('symbol') ?? '');
       const budget = Number(url.searchParams.get('budget') ?? NaN);
-      const preview = await previewSequence(symbol, budget);
+      // Optional custom structure (site parity): spacing, rounds, multipliers.
+      const deltaRaw = url.searchParams.get('deltaPrice');
+      const roundsRaw = url.searchParams.get('nbRounds');
+      const multRaw = url.searchParams.get('multipliers');
+      const custom = {
+        deltaPrice: deltaRaw ? Number(deltaRaw) : undefined,
+        nbRounds: roundsRaw ? Number(roundsRaw) : undefined,
+        multipliers: multRaw ? multRaw.split(',').map(Number).filter((n) => Number.isFinite(n) && n > 0) : undefined,
+      };
+      const hasCustom = Boolean(custom.deltaPrice || custom.nbRounds || custom.multipliers?.length);
+      const preview = await previewSequence(symbol, budget, hasCustom ? custom : undefined);
       sendJson(res, 200, { ok: true, preview });
       return;
     }
@@ -399,11 +439,22 @@ const server = http.createServer(async (req, res) => {
       startInFlight = true;
       try {
         const body = await readJsonBody(req);
+        const customBody = (body.custom ?? {}) as Record<string, unknown>;
+        const multipliers = Array.isArray(customBody.multipliers)
+          ? (customBody.multipliers as unknown[]).map(Number).filter((n) => Number.isFinite(n) && n > 0)
+          : undefined;
+        const custom = {
+          deltaPrice: customBody.deltaPrice === undefined ? undefined : Number(customBody.deltaPrice),
+          nbRounds: customBody.nbRounds === undefined ? undefined : Number(customBody.nbRounds),
+          multipliers: multipliers && multipliers.length ? multipliers : undefined,
+        };
+        const hasCustom = Boolean(custom.deltaPrice || custom.nbRounds || custom.multipliers);
         const summary = await startSequence(
           {
             symbol: String(body.symbol ?? 'BTC'),
             budget: Number(body.budget ?? NaN),
             mode: MODE, // the client can never escalate to live; only RUNNER_MODE decides
+            custom: hasCustom ? custom : undefined,
           },
           log,
         );
