@@ -34,7 +34,7 @@ import {
 import { publicPrice } from '../runner/prices.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import { startingaleLabel } from '../runner/startingale.js';
-import { keysStatus, loadKeysIntoEnv } from '../runner/keystore.js';
+import { KEY_VARS, keysStatus, loadKeysIntoEnv, writeKeys, type KeyVar } from '../runner/keystore.js';
 import { renderPage } from './page.js';
 
 // Load <RUNNER_STATE_DIR>/keys.env into the environment before anything reads
@@ -61,12 +61,12 @@ const priceCache = new Map<string, { price: number; at: number }>();
 const priceInflight = new Set<string>();
 const PRICE_TTL_MS = 25 * 1000;
 
-function cachedPrice(symbol: string): number | null {
+function cachedPrice(symbol: string, assetType: 'crypto' | 'stock' = 'crypto'): number | null {
   const hit = priceCache.get(symbol);
   const fresh = hit && Date.now() - hit.at < PRICE_TTL_MS;
   if (!fresh && !priceInflight.has(symbol)) {
     priceInflight.add(symbol);
-    publicPrice(symbol)
+    publicPrice(symbol, assetType)
       .then((price) => priceCache.set(symbol, { price, at: Date.now() }))
       .catch(() => undefined)
       .finally(() => priceInflight.delete(symbol));
@@ -87,7 +87,13 @@ interface CatalogRow {
   score: number;
   startingale: string;
   assetType: 'crypto' | 'stock';
+  /** Live public price when already cached (top rows are prefetched). */
+  price?: number | null;
 }
+
+// Bounded prefetch: warm the price cache for the top rows only, so the
+// catalog shows live prices without hammering the public tickers.
+const CATALOG_PRICE_PREFETCH = 15;
 
 let catalogCache: { at: number; rows: CatalogRow[] } | null = null;
 const CATALOG_TTL_MS = 60 * 1000;
@@ -120,6 +126,16 @@ async function getCatalog(): Promise<CatalogRow[]> {
   );
   catalogCache = { at: Date.now(), rows };
   return rows;
+}
+
+// Serve the catalog with whatever live prices are cached, warming the top
+// rows in the background (cachedPrice triggers the fetch and returns null
+// until it lands; the UI polls, so prices fill in within seconds).
+function catalogWithPrices(rows: CatalogRow[]): CatalogRow[] {
+  return rows.map((row, i) => ({
+    ...row,
+    price: i < CATALOG_PRICE_PREFETCH ? cachedPrice(row.symbol, row.assetType) : (priceCache.get(row.symbol)?.price ?? null),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -260,8 +276,54 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (route === 'GET /api/catalog') {
-      const instruments = await getCatalog();
+      const instruments = catalogWithPrices(await getCatalog());
       sendJson(res, 200, { ok: true, instruments });
+      return;
+    }
+
+    if (route === 'GET /api/price') {
+      const symbol = String(url.searchParams.get('symbol') ?? '').toUpperCase();
+      const assetType = url.searchParams.get('assetType') === 'stock' ? 'stock' : 'crypto';
+      if (!/^[A-Z0-9]{1,12}$/.test(symbol)) {
+        sendJson(res, 400, { ok: false, error: 'invalid symbol' });
+        return;
+      }
+      const price = await publicPrice(symbol, assetType);
+      priceCache.set(symbol, { price, at: Date.now() });
+      sendJson(res, 200, { ok: true, symbol, price, assetType });
+      return;
+    }
+
+    if (route === 'POST /api/keys') {
+      // Guarded key intake, per the security design:
+      //  - only over localhost OR when the whole server sits behind
+      //    RUNNER_PASSWORD (isAuthorized already passed above);
+      //  - WRITE-ONLY: values go to keys.env (0600) and are never echoed,
+      //    logged, or served back — the response is presence booleans;
+      //  - the keystore allowlist means RUNNER_MODE can never be smuggled
+      //    in: live stays decided by the environment at launch.
+      const remote = req.socket.remoteAddress ?? '';
+      const isLocal = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+      if (!isLocal && !PASSWORD) {
+        sendJson(res, 403, {
+          ok: false,
+          error: 'Key configuration over the network requires RUNNER_PASSWORD. Set it, or configure keys from the machine itself (localhost or `npm run runner -- keys`).',
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const entries: Partial<Record<KeyVar, string>> = {};
+      for (const key of KEY_VARS) {
+        const value = body[key];
+        if (typeof value === 'string' && value.trim() !== '') entries[key] = value.trim();
+      }
+      if (Object.keys(entries).length === 0) {
+        sendJson(res, 400, { ok: false, error: 'no keys provided' });
+        return;
+      }
+      writeKeys(entries);
+      loadKeysIntoEnv();
+      sendJson(res, 200, { ok: true, keys: keysStatus() }); // booleans only
       return;
     }
 

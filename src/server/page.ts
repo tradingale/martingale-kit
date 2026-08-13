@@ -186,7 +186,7 @@ ${banner}
       <div class="cat-note">Descriptive metrics, not advice. Click a row to load it into Start below.</div>
       <div class="cat-wrap">
         <table class="cat">
-          <thead><tr><th>Symbol</th><th>Name</th><th class="cat-sort" id="catSortScore">Score &#9662;</th><th>Startingale</th></tr></thead>
+          <thead><tr><th>Symbol</th><th>Name</th><th class="cat-sort" id="catSortScore">Score &#9662;</th><th>Startingale</th><th>Live price</th></tr></thead>
           <tbody id="catBody"></tbody>
         </table>
       </div>
@@ -210,6 +210,29 @@ ${banner}
   </div>
 
   <div id="sequences"></div>
+
+  <div class="card">
+    <div class="card-head"><h2>API keys</h2><span class="chip">write-only</span></div>
+    <div class="card-body">
+      <div class="cat-note">
+        Values are saved to this deployment's local keys file (owner-only), never displayed again, never logged, never served.
+        Configuring keys does NOT switch to live: live requires relaunching with RUNNER_MODE=live.
+        Over the network this form requires RUNNER_PASSWORD; otherwise use it from the machine itself.
+      </div>
+      <form class="controls" id="keysForm" autocomplete="off">
+        <div class="field"><label for="kTgl">Tradingale token</label><input id="kTgl" type="password" placeholder="unchanged" autocomplete="new-password"></div>
+        <div class="field"><label for="kKk">Kraken key</label><input id="kKk" type="password" placeholder="unchanged" autocomplete="new-password"></div>
+        <div class="field"><label for="kKs">Kraken secret</label><input id="kKs" type="password" placeholder="unchanged" autocomplete="new-password"></div>
+        <div class="field"><label for="kAk">Alpaca key id</label><input id="kAk" type="password" placeholder="unchanged" autocomplete="new-password"></div>
+        <div class="field"><label for="kAs">Alpaca secret</label><input id="kAs" type="password" placeholder="unchanged" autocomplete="new-password"></div>
+        <button class="primary" id="keysBtn" type="submit">Save keys</button>
+      </form>
+      <div class="msg" id="keysMsg"></div>
+      <p style="margin-top:10px;font-size:10px;color:var(--faint)">
+        Exchange keys must be trade-only (never withdrawal permission), ideally IP-allowlisted. Your keys, your account, your sole responsibility.
+      </p>
+    </div>
+  </div>
 
   <footer class="page">
     <p>Descriptive model structure at the capital shown. Outcomes are arithmetic, before fees and slippage. Not investment advice; you alone decide and execute on your own exchange.</p>
@@ -351,7 +374,7 @@ ${banner}
     stats.appendChild(stat('Phase', seq.phase));
     stats.appendChild(stat('Level reached', seq.deepestFilledLevel + ' / ' + seq.totalLevels));
     stats.appendChild(stat('Budget', '$' + fmtPrice(seq.budget)));
-    stats.appendChild(stat('Last price', seq.lastPrice === null ? 'waiting' : '$' + fmtPrice(seq.lastPrice)));
+    stats.appendChild(stat('Live price', seq.lastPrice === null ? 'waiting' : '$' + fmtPrice(seq.lastPrice)));
     stats.appendChild(stat('Venue', seq.venue === 'kraken' ? 'kraken (live)' : 'paper (simulated)'));
     body.appendChild(stats);
 
@@ -435,16 +458,26 @@ ${banner}
       tr.appendChild(el('td', null, r.name || r.symbol));
       tr.appendChild(el('td', 'cat-score mono', Number(r.score).toFixed(2)));
       tr.appendChild(el('td', sgClass(r.startingale), r.startingale));
-      tr.addEventListener('click', function () { pickInstrument(r.symbol); });
+      tr.appendChild(el('td', 'mono', r.price === null || r.price === undefined ? '—' : '$' + fmtPrice(r.price)));
+      tr.addEventListener('click', function () { pickInstrument(r.symbol, r.assetType); });
       body.appendChild(tr);
     });
   }
 
-  function pickInstrument(symbol) {
+  function pickInstrument(symbol, assetType) {
     document.getElementById('symbol').value = symbol;
-    showMsg('ok', symbol + ' loaded below. Set a budget and Start.');
+    showMsg('ok', symbol + ' loaded below. Fetching live price...');
     document.getElementById('startForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
     document.getElementById('budget').focus();
+    fetch('/api/price?symbol=' + encodeURIComponent(symbol) + '&assetType=' + encodeURIComponent(assetType || 'crypto'))
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (body && body.ok) {
+          showMsg('ok', symbol + ' loaded. Live price $' + fmtPrice(body.price) + '. Set a budget and Start.');
+          renderCatalog();
+        } else showMsg('ok', symbol + ' loaded below. Set a budget and Start.');
+      })
+      .catch(function () { showMsg('ok', symbol + ' loaded below. Set a budget and Start.'); });
   }
 
   function fetchCatalog() {
@@ -520,6 +553,36 @@ ${banner}
       .catch(function () { window.alert('stop failed: server unreachable'); });
   }
 
+  document.getElementById('keysForm').addEventListener('submit', function (event) {
+    event.preventDefault();
+    var btn = document.getElementById('keysBtn');
+    var box = document.getElementById('keysMsg');
+    var payload = {};
+    var map = { kTgl: 'TRADINGALE_TOKEN', kKk: 'KRAKEN_API_KEY', kKs: 'KRAKEN_API_SECRET', kAk: 'ALPACA_API_KEY_ID', kAs: 'ALPACA_API_SECRET_KEY' };
+    Object.keys(map).forEach(function (id) {
+      var v = document.getElementById(id).value;
+      if (v && v.trim()) payload[map[id]] = v.trim();
+    });
+    if (!Object.keys(payload).length) { box.className = 'msg err'; box.textContent = 'Nothing to save.'; return; }
+    btn.disabled = true;
+    fetch('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
+      .then(function (r) {
+        if (r.ok && r.body.ok) {
+          box.className = 'msg ok';
+          box.textContent = 'Saved (write-only; values will not be shown again). Live still requires relaunching with RUNNER_MODE=live.';
+          Object.keys(map).forEach(function (id) { document.getElementById(id).value = ''; });
+          renderKeys(r.body.keys || {});
+          fetchCatalog();
+        } else {
+          box.className = 'msg err';
+          box.textContent = (r.body && r.body.error) || 'save failed';
+        }
+      })
+      .catch(function () { box.className = 'msg err'; box.textContent = 'save failed: server unreachable'; })
+      .then(function () { btn.disabled = false; });
+  });
+
   document.getElementById('catFilter').addEventListener('input', renderCatalog);
   document.getElementById('catSortScore').addEventListener('click', function () {
     catSortDesc = !catSortDesc;
@@ -530,7 +593,7 @@ ${banner}
   refresh();
   setInterval(refresh, 30000);
   fetchCatalog();
-  setInterval(fetchCatalog, 5 * 60000);
+  setInterval(fetchCatalog, 60000);
 })();
 </script>
 </body>

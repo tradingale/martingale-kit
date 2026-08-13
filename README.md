@@ -78,7 +78,7 @@ export TRADINGALE_TOKEN=...       # tradingale.com/settings/api  (or: npm run ru
 npm run server                    # paper by default, http://localhost:8080
 ```
 
-- **Catalog picker.** The page shows a scoreboard of your instruments — symbol, name, Martingale Score, and Startingale as a word (Strong / Favorable / Moderate / Misaligned) — sortable by score and filterable. Click a row to load it into the Start form. The scoreboard is proxied through the server, so your `TRADINGALE_TOKEN` never reaches the browser. Whatever your plan scopes is what shows (free = BTC).
+- **Catalog picker.** The page shows a scoreboard of your instruments — symbol, name, Martingale Score, Startingale as a word (Strong / Favorable / Moderate / Misaligned), and the live public price (top rows prefetched, the rest on click) — sortable by score and filterable. Click a row to load it into the Start form with its live price. The scoreboard is proxied through the server, so your `TRADINGALE_TOKEN` never reaches the browser. Whatever your plan scopes is what shows (free = BTC). Prices come from public tickers (crypto: Binance with a Kraken fallback; stocks: a free delayed feed), no keys needed.
 - **Key status.** A line reports whether the Tradingale token and the Kraken / Alpaca keys are configured — presence only, never the values — with the command to set them.
 - Each sequence renders as the Tradingale price ladder (model buy level, model exit level, outcome if reached) plus phase, level reached, budget, last price and venue. It refreshes on a short interval.
 - `RUNNER_MODE=live` switches to the live adapters, shows a permanent red banner, and refuses to start while keys are missing. Paper mode shows an amber "Simulated" banner.
@@ -97,6 +97,8 @@ Configure keys with the guided command instead of exporting env vars by hand:
 ```bash
 npm run runner -- keys      # hidden prompts; writes .martingale-runner/keys.env (0600)
 ```
+
+Or from the web UI: the **API keys** card at the bottom of the page is write-only (values are saved to the same local file, never displayed again, never served back — the status line only ever shows configured/absent). Over the network the form requires `RUNNER_PASSWORD`; without it, it only works from the machine itself (localhost). Saving keys never changes the mode.
 
 It stores your Tradingale token and, for live, your exchange keys. Then relaunch in live mode:
 
