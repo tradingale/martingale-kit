@@ -218,6 +218,8 @@ ${banner}
         Values are saved to this deployment's local keys file (owner-only), never displayed again, never logged, never served.
         Configuring keys does NOT switch to live: live requires relaunching with RUNNER_MODE=live.
         Over the network this form requires RUNNER_PASSWORD; otherwise use it from the machine itself.
+        Bonus: with Alpaca keys saved, US stock prices upgrade from the delayed feed to Alpaca live data.
+        On Railway, mount a volume (RUNNER_STATE_DIR) so saved keys survive redeploys — or set them as service variables instead.
       </div>
       <form class="controls" id="keysForm" autocomplete="off">
         <div class="field"><label for="kTgl">Tradingale token</label><input id="kTgl" type="password" placeholder="unchanged" autocomplete="new-password"></div>

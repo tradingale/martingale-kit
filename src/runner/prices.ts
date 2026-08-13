@@ -29,9 +29,31 @@ export async function krakenPublicPrice(symbol: string): Promise<number> {
 }
 
 /**
- * Stooq free CSV quote for US stocks (no key required, ~15 min delayed).
- * Delayed prices are fine for a paper runner reconciling on a schedule;
- * the delay is disclosed in the README and the UI.
+ * Alpaca live stock price (latest trade) — used automatically when the user
+ * has configured ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY. The data API
+ * host is the same for paper and live accounts, and the free feed works
+ * with any account's keys. Keys go out as headers to Alpaca only; they are
+ * never logged or served.
+ */
+export async function alpacaStockPrice(symbol: string): Promise<number> {
+  const key = process.env.ALPACA_API_KEY_ID;
+  const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!key || !secret) throw new Error('Alpaca keys not configured');
+  const res = await fetch(
+    `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol.toUpperCase())}/trades/latest`,
+    { headers: { 'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret } },
+  );
+  if (!res.ok) throw new Error(`Alpaca data ${res.status} for ${symbol}`);
+  const body = (await res.json()) as { trade?: { p?: number } };
+  const price = Number(body.trade?.p);
+  if (!Number.isFinite(price) || price <= 0) throw new Error(`Alpaca: no trade for ${symbol}`);
+  return price;
+}
+
+/**
+ * Stooq free CSV quote for US stocks (no key required, delayed; the delay
+ * is disclosed in the README and the UI). Fine for a paper runner
+ * reconciling on a schedule.
  */
 export async function stooqStockPrice(symbol: string): Promise<number> {
   const res = await fetch(
@@ -45,9 +67,22 @@ export async function stooqStockPrice(symbol: string): Promise<number> {
   return price;
 }
 
-/** Crypto: Binance first, Kraken fallback. Stocks: Stooq (delayed). */
+/**
+ * Crypto: Binance first, Kraken fallback (public tickers, live, no keys).
+ * Stocks: Alpaca live when the user's keys are configured, otherwise the
+ * free delayed feed.
+ */
 export async function publicPrice(symbol: string, assetType: 'crypto' | 'stock' = 'crypto'): Promise<number> {
-  if (assetType === 'stock') return stooqStockPrice(symbol);
+  if (assetType === 'stock') {
+    if (process.env.ALPACA_API_KEY_ID && process.env.ALPACA_API_SECRET_KEY) {
+      try {
+        return await alpacaStockPrice(symbol);
+      } catch {
+        return await stooqStockPrice(symbol);
+      }
+    }
+    return stooqStockPrice(symbol);
+  }
   try {
     return await binancePublicPrice(symbol);
   } catch {
