@@ -232,9 +232,9 @@ ${banner}
         </label>
         <div id="customFields" style="display:none;margin-top:10px">
           <div class="controls">
-            <div class="field"><label for="cDelta">Delta price (%)</label><input id="cDelta" inputmode="decimal" autocomplete="off" style="width:110px"></div>
-            <div class="field"><label for="cRounds">Rounds</label><input id="cRounds" inputmode="numeric" autocomplete="off" style="width:90px"></div>
-            <div class="field" style="flex:1"><label for="cMult">Multipliers (comma separated, quantities)</label><input id="cMult" autocomplete="off" style="width:100%;min-width:200px"></div>
+            <div class="field"><label for="cDelta">Delta price (5-15%)</label><input id="cDelta" inputmode="decimal" autocomplete="off" style="width:130px" min="5" max="15"></div>
+            <div class="field"><label for="cRounds">Rounds</label><select id="cRounds" class="cat-filter" style="width:90px"><option value="4">4</option><option value="5">5</option></select></div>
+            <div class="field" style="flex:1"><label for="cMult" id="cMultLabel">Multipliers (quantities)</label><input id="cMult" autocomplete="off" style="width:100%;min-width:200px"></div>
             <button class="tab" id="cReset" type="button">Reset to Tradingale</button>
           </div>
           <p style="margin-top:8px;font-size:10px;color:var(--faint)">
@@ -614,11 +614,15 @@ ${banner}
     if (p.custom) chips.appendChild(el('span', 'chip', 'custom structure'));
 
     // Mirror the structure actually used into the custom fields, so opening
-    // the editor starts from Tradingale's values instead of blanks.
+    // the editor starts from Tradingale's values instead of blanks. The
+    // editor's own bounds apply (4 or 5 rounds, 5-15% spacing), so a
+    // tighter Tradingale delta is raised to the editable minimum here.
     if (p.params && !document.getElementById('customToggle').checked) {
-      document.getElementById('cDelta').value = (p.params.deltaPrice * 100).toFixed(2);
-      document.getElementById('cRounds').value = String(p.params.nbRounds);
+      var pct = Math.min(15, Math.max(5, p.params.deltaPrice * 100));
+      document.getElementById('cDelta').value = pct.toFixed(2);
+      document.getElementById('cRounds').value = p.params.nbRounds >= 5 ? '5' : '4';
       document.getElementById('cMult').value = p.params.multipliers.join(',');
+      syncMultipliers();
     }
 
     var meta = document.getElementById('pvMeta');
@@ -628,6 +632,9 @@ ${banner}
     } else {
       meta.textContent = 'Budget $' + fmtPrice(p.budget) + ' (floor ~$' + p.budgetMin + '), ' + p.levels.length + ' levels, live entry $' + fmtPrice(p.entryPrice) + '. Review the ladder, then Start.';
       meta.style.color = '';
+    }
+    if (p.notes && p.notes.length) {
+      meta.textContent += '  [adjusted: ' + p.notes.join('; ') + ']';
     }
 
     var fake = { deltaPrice: p.deltaPrice, deepestFilledLevel: 0, levels: p.levels, budget: p.budget };
@@ -782,7 +789,30 @@ ${banner}
     document.getElementById('customFields').style.display = 'none';
     loadPreview();
   });
-  ['cDelta', 'cRounds', 'cMult'].forEach(function (id) {
+  // Changing the round count immediately resizes the multiplier list to
+  // rounds - 1 (pad with the last value, or trim), so the two fields can
+  // never disagree — 5 rounds always shows 4 multipliers.
+  function syncMultipliers() {
+    var rounds = Number(document.getElementById('cRounds').value) || 4;
+    var need = Math.max(0, rounds - 1);
+    var list = (document.getElementById('cMult').value || '')
+      .split(',').map(function (s) { return Number(s.trim()); })
+      .filter(function (n) { return Number.isFinite(n) && n > 0; });
+    while (list.length < need) list.push(list.length ? list[list.length - 1] : 2);
+    list = list.slice(0, need);
+    document.getElementById('cMult').value = list.join(',');
+    document.getElementById('cMultLabel').textContent = 'Multipliers (' + need + ' for ' + rounds + ' rounds)';
+  }
+
+  document.getElementById('cRounds').addEventListener('change', function () {
+    syncMultipliers();
+    loadPreview();
+  });
+  document.getElementById('cDelta').addEventListener('blur', function () {
+    var v = Number(this.value);
+    if (Number.isFinite(v) && v > 0) this.value = String(Math.min(15, Math.max(5, v)));
+  });
+  ['cDelta', 'cMult'].forEach(function (id) {
     document.getElementById(id).addEventListener('input', function () {
       if (previewTimer) clearTimeout(previewTimer);
       previewTimer = setTimeout(loadPreview, 700);

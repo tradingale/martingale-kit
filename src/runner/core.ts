@@ -74,27 +74,61 @@ export interface CustomParams {
   multipliers?: number[];
 }
 
-function applyCustom(base: TradingaleInstrument, custom?: CustomParams): TradingaleInstrument {
-  if (!custom) return base;
+/** Custom structures are bounded like the site's: 4 or 5 rounds, 5% to 15% spacing. */
+export const CUSTOM_ROUNDS = [4, 5] as const;
+export const CUSTOM_DELTA_MIN = 0.05;
+export const CUSTOM_DELTA_MAX = 0.15;
+
+function applyCustom(
+  base: TradingaleInstrument,
+  custom?: CustomParams,
+): { instrument: TradingaleInstrument; notes: string[] } {
+  if (!custom) return { instrument: base, notes: [] };
+  const notes: string[] = [];
   const merged: TradingaleInstrument = { ...base };
+
+  // Spacing: clamped to the allowed band rather than rejected, so typing in
+  // the editor never hard-errors mid-keystroke.
   if (Number.isFinite(custom.deltaPrice) && (custom.deltaPrice as number) > 0) {
-    merged.deltaPrice = custom.deltaPrice as number;
+    let delta = custom.deltaPrice as number;
+    if (delta < CUSTOM_DELTA_MIN || delta > CUSTOM_DELTA_MAX) {
+      const clamped = Math.min(CUSTOM_DELTA_MAX, Math.max(CUSTOM_DELTA_MIN, delta));
+      notes.push(
+        `delta price ${(delta * 100).toFixed(2)}% is outside 5%-15%, using ${(clamped * 100).toFixed(2)}%`,
+      );
+      delta = clamped;
+    }
+    merged.deltaPrice = delta;
   }
-  if (Number.isFinite(custom.nbRounds) && (custom.nbRounds as number) >= 2) {
-    merged.nbRounds = Math.floor(custom.nbRounds as number);
+
+  // Rounds: 4 or 5 only.
+  if (Number.isFinite(custom.nbRounds)) {
+    const asked = Math.floor(custom.nbRounds as number);
+    if (!(CUSTOM_ROUNDS as readonly number[]).includes(asked)) {
+      const clamped = asked <= 4 ? 4 : 5;
+      notes.push(`rounds must be 4 or 5, using ${clamped}`);
+      merged.nbRounds = clamped;
+    } else {
+      merged.nbRounds = asked;
+    }
   }
+
   if (Array.isArray(custom.multipliers) && custom.multipliers.length > 0) {
     const cleaned = custom.multipliers.map(Number).filter((m) => Number.isFinite(m) && m > 0);
     if (cleaned.length > 0) merged.multipliers = cleaned;
   }
-  // The engine needs exactly nbRounds - 1 multipliers: pad with the last
-  // value, or trim, so a user editing one field alone still gets a valid
-  // structure instead of an error.
+
+  // The engine needs exactly nbRounds - 1 multipliers. Pad with the last
+  // value (or trim) so changing the round count alone stays valid, and say
+  // so when the list had to be resized.
   const need = Math.max(0, merged.nbRounds - 1);
   const list = [...merged.multipliers];
+  if (list.length !== need) {
+    notes.push(`${need} multipliers needed for ${merged.nbRounds} rounds, list resized`);
+  }
   while (list.length < need) list.push(list[list.length - 1] ?? 2);
   merged.multipliers = list.slice(0, need);
-  return merged;
+  return { instrument: merged, notes };
 }
 
 export interface SequencePreview {
@@ -113,6 +147,8 @@ export interface SequencePreview {
   params: { deltaPrice: number; nbRounds: number; multipliers: number[]; initialBetRatio: number };
   /** True when the preview used custom values instead of Tradingale's. */
   custom: boolean;
+  /** Adjustments applied to the custom input (clamped delta, resized list). */
+  notes: string[];
 }
 
 /**
@@ -146,7 +182,7 @@ export async function previewSequence(
   if (!Number.isFinite(base.initialBetRatio)) {
     throw new Error(`Tradingale did not return initial_bet_ratio for ${symbol}`);
   }
-  const instrument = applyCustom(base, custom);
+  const { instrument, notes } = applyCustom(base, custom);
 
   let grids = NULL_GRIDS;
   let hasGrids = false;
@@ -181,6 +217,7 @@ export async function previewSequence(
       initialBetRatio: instrument.initialBetRatio,
     },
     custom: Boolean(custom && (custom.deltaPrice || custom.nbRounds || custom.multipliers)),
+    notes,
   };
 }
 
@@ -209,7 +246,7 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
   }
   // Custom structures (edited spacing / rounds / multipliers) go through the
   // exact same math and guardrails as Tradingale's own parameters.
-  const instrument = applyCustom(baseInstrument, options.custom);
+  const { instrument } = applyCustom(baseInstrument, options.custom);
 
   const sequenceId = `${symbol}-${Date.now()}`;
 
