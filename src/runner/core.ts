@@ -16,7 +16,7 @@ import type { VenueAdapter } from '../adapters/types.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import type { Fill, LadderLevel, VenueGrids } from '../types.js';
 import { krakenPublicPrice, publicPrice } from './prices.js';
-import { listRuns, loadRun, saveRun, type RunnerFile } from './state.js';
+import { deleteRun, listRuns, loadRun, saveRun, type RunnerFile } from './state.js';
 
 export type RunnerMode = 'paper' | 'live';
 
@@ -343,7 +343,7 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
   }
 
   if (venue instanceof PaperAdapter) {
-    file.paperFills = await venue.getFills();
+    await savePaperState(file, venue);
     saveRun(file, sequenceId);
   }
 
@@ -370,8 +370,15 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
 function rebuildPaper(file: RunnerFile): PaperAdapter {
   const venue = new PaperAdapter();
   const fills = (file.paperFills ?? []) as Fill[];
-  venue.restore(file.plan, fills);
+  venue.restore(file.plan, fills, (file.paperOpen ?? []) as string[]);
   return venue;
+}
+
+/** Persist the paper venue's fills AND still-open orders (see paperOpen). */
+async function savePaperState(file: RunnerFile, venue: VenueAdapter): Promise<void> {
+  if (!(venue instanceof PaperAdapter)) return;
+  file.paperFills = await venue.getFills();
+  file.paperOpen = (await venue.getOpenOrders()).map((o) => o.clientId);
 }
 
 // Build the venue adapter for a persisted sequence and read the current price.
@@ -380,6 +387,7 @@ function rebuildPaper(file: RunnerFile): PaperAdapter {
 async function buildVenue(
   file: RunnerFile,
   sequenceId: string,
+  options: { skipPrice?: boolean } = {},
 ): Promise<{ venue: VenueAdapter; price: number }> {
   if (file.venue === 'kraken') {
     const venue = new KrakenAdapter({
@@ -387,7 +395,7 @@ async function buildVenue(
       sequenceId,
       sinceMs: Date.parse(file.createdAt) - 60 * 1000,
     });
-    return { venue, price: await krakenPublicPrice(file.symbol) };
+    return { venue, price: options.skipPrice ? (file.lastPrice ?? 0) : await krakenPublicPrice(file.symbol) };
   }
   if (file.venue === 'alpaca') {
     const venue = new AlpacaAdapter({
@@ -395,9 +403,13 @@ async function buildVenue(
       assetType: file.assetType ?? 'stock',
       paper: process.env.ALPACA_PAPER === 'true',
     });
-    return { venue, price: await publicPrice(file.symbol, file.assetType ?? 'stock') };
+    return {
+      venue,
+      price: options.skipPrice ? (file.lastPrice ?? 0) : await publicPrice(file.symbol, file.assetType ?? 'stock'),
+    };
   }
   const paper = rebuildPaper(file);
+  if (options.skipPrice) return { venue: paper, price: file.lastPrice ?? 0 };
   const price = await publicPrice(file.symbol, file.assetType ?? 'crypto');
   paper.tick(price);
   return { venue: paper, price };
@@ -447,7 +459,7 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
   file.state = state;
   file.lastPrice = price;
   file.lastCycleAt = new Date().toISOString();
-  if (venue instanceof PaperAdapter) file.paperFills = await venue.getFills();
+  await savePaperState(file, venue);
   saveRun(file, sequenceId);
   if (actions.length === 0) log(`${sequenceId}: $${price}, level ${state.deepestFilledLevel}, nothing to do`);
   return {
@@ -519,7 +531,20 @@ export async function stopSequence(
     };
   }
 
-  const { venue, price } = await buildVenue(file, sequenceId);
+  // A stop must ALWAYS be possible: a public ticker being unreachable must
+  // never stand between the user and cancelling their orders. The price is
+  // cosmetic here (it only updates lastPrice), so degrade instead of throwing.
+  let venue: VenueAdapter;
+  let price: number | null = null;
+  try {
+    const built = await buildVenue(file, sequenceId);
+    venue = built.venue;
+    price = built.price;
+  } catch (error) {
+    log(`${sequenceId}: price lookup failed (${error instanceof Error ? error.message : error}); cancelling anyway`);
+    const built = await buildVenue(file, sequenceId, { skipPrice: true });
+    venue = built.venue;
+  }
 
   // 1. Cancel every open order at the venue (idempotent, tolerant of a
   //    single failure so one bad id does not block the rest).
@@ -559,14 +584,14 @@ export async function stopSequence(
   }
 
   file.state.phase = 'canceled';
+  if (price !== null) file.lastPrice = price;
   file.state.haltReason = options.reverse
     ? reversed
       ? `stopped by operator; position reversed (market sold ${reversedQuantity})`
       : 'stopped by operator; no position to reverse'
     : 'stopped by operator; open orders canceled, position kept';
-  file.lastPrice = price;
   file.lastCycleAt = new Date().toISOString();
-  if (venue instanceof PaperAdapter) file.paperFills = await venue.getFills();
+  await savePaperState(file, venue);
   saveRun(file, sequenceId);
 
   return {
@@ -578,6 +603,32 @@ export async function stopSequence(
     reversedQuantity,
     warning: null,
   };
+}
+
+/**
+ * Delete a finished sequence's file (dashboard housekeeping). A RUNNING
+ * sequence is never deleted: stop it first, otherwise live orders would
+ * keep resting at the venue with nothing reconciling them.
+ */
+export function deleteSequence(sequenceId: string): { deleted: boolean; reason?: string } {
+  const file = loadRun(sequenceId);
+  if (!file) return { deleted: false, reason: 'unknown sequence' };
+  if (file.state.phase === 'running') {
+    return { deleted: false, reason: 'sequence is running: stop it first' };
+  }
+  return { deleted: deleteRun(sequenceId) };
+}
+
+/** Delete every non-running sequence. Returns how many files were removed. */
+export function deleteFinished(onlyPaper = false): number {
+  let removed = 0;
+  for (const id of listRuns()) {
+    const file = loadRun(id);
+    if (!file || file.state.phase === 'running') continue;
+    if (onlyPaper && file.venue !== 'paper') continue;
+    if (deleteRun(id)) removed++;
+  }
+  return removed;
 }
 
 export interface SequenceStatus {

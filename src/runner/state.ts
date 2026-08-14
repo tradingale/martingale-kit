@@ -17,6 +17,12 @@ export interface RunnerFile {
   state: SequenceState;
   /** Fill log for the paper venue so a restart replays the same world. */
   paperFills?: unknown[];
+  /**
+   * Client ids of paper orders still resting when the last cycle ended. The
+   * simulated book lives in memory, so without this a one-shot `cycle` in a
+   * new process would not see the active sell and would place another.
+   */
+  paperOpen?: string[];
   /** Last public price observed by a cycle (display only, never a promise). */
   lastPrice?: number;
   /** When the last reconciliation cycle ran (ISO). */
@@ -46,6 +52,16 @@ export function loadRun(sequenceId: string): RunnerFile | null {
   const target = sequenceFile(sequenceId);
   if (!fs.existsSync(target)) return null;
   return JSON.parse(fs.readFileSync(target, 'utf-8')) as RunnerFile;
+}
+
+/** Remove a persisted sequence file. Returns false when it was already gone. */
+export function deleteRun(sequenceId: string): boolean {
+  try {
+    fs.unlinkSync(sequenceFile(sequenceId));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function listRuns(): string[] {

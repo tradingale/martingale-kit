@@ -66,14 +66,18 @@ export class PaperAdapter implements VenueAdapter {
    * deliberately dropped and re-placed by the next reconcile() cycle, which
    * keeps restore() free of any engine-state knowledge.
    */
-  restore(plan: SequencePlan, fills: Fill[]): void {
+  restore(plan: SequencePlan, fills: Fill[], openIds: string[] = []): void {
     this.orders.clear();
     this.fills = fills.map((f) => ({ ...f }));
     this.clock = fills.length;
     const filledIds = new Set(fills.map((f) => f.clientId));
+    // Sells that were resting when the process exited are named in openIds
+    // (persisted by the runner). Without that list a one-shot `cycle` in a
+    // fresh process would see no active sell and place a duplicate.
+    const openSet = new Set(openIds);
     for (const order of plan.orders) {
       const isFilled = filledIds.has(order.clientId);
-      if (order.side === 'sell' && !isFilled) continue;
+      if (order.side === 'sell' && !isFilled && !openSet.has(order.clientId)) continue;
       this.orders.set(order.clientId, {
         clientId: order.clientId,
         side: order.side,

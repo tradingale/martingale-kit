@@ -25,6 +25,8 @@ import crypto from 'node:crypto';
 import {
   CYCLE_MS,
   cycleAll,
+  deleteFinished,
+  deleteSequence,
   krakenKeysPresent,
   previewSequence,
   runnerMode,
@@ -369,6 +371,29 @@ const server = http.createServer(async (req, res) => {
       const hasCustom = Boolean(custom.deltaPrice || custom.nbRounds || custom.multipliers?.length);
       const preview = await previewSequence(symbol, budget, hasCustom ? custom : undefined);
       sendJson(res, 200, { ok: true, preview });
+      return;
+    }
+
+    if (route === 'POST /api/delete') {
+      // Dashboard housekeeping: drop finished sequence files so the page
+      // stays readable. Running sequences are protected (stop them first).
+      const body = await readJsonBody(req);
+      if (body.finished === true) {
+        const removed = deleteFinished(body.onlyPaper === true);
+        sendJson(res, 200, { ok: true, removed });
+        return;
+      }
+      const sequenceId = String(body.sequenceId ?? '');
+      if (!sequenceId) {
+        sendJson(res, 400, { ok: false, error: 'sequenceId is required' });
+        return;
+      }
+      const result = deleteSequence(sequenceId);
+      if (!result.deleted) {
+        sendJson(res, 400, { ok: false, error: result.reason ?? 'could not delete' });
+        return;
+      }
+      sendJson(res, 200, { ok: true, removed: 1 });
       return;
     }
 

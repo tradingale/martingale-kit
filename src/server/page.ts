@@ -71,6 +71,13 @@ export function renderPage(mode: RunnerMode): string {
     background: rgba(42, 129, 255, 0.10); border: 1px solid rgba(60, 231, 252, 0.2);
     border-radius: 8px; padding: 2px 8px;
   }
+  /* Simulated vs real, visible at a glance on every sequence card. */
+  .card.paper > .card-head { background: linear-gradient(90deg, rgba(180, 83, 9, 0.35), rgba(251, 191, 36, 0.12)); border-bottom-color: rgba(251, 191, 36, 0.45); }
+  .card.paper { border-color: rgba(251, 191, 36, 0.4); }
+  .card.livecard > .card-head { background: linear-gradient(90deg, rgba(127, 29, 29, 0.45), rgba(239, 68, 68, 0.12)); border-bottom-color: rgba(239, 68, 68, 0.5); }
+  .card.livecard { border-color: rgba(239, 68, 68, 0.45); }
+  .chip-paper { color: #fcd34d; border-color: rgba(251, 191, 36, 0.5); background: rgba(180, 83, 9, 0.18); }
+  .chip-live { color: #fecaca; border-color: rgba(239, 68, 68, 0.55); background: rgba(127, 29, 29, 0.25); }
   .chip-halted { color: #fda4af; border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.08); }
   .chip-complete { color: #86efac; border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); }
   .card-body { padding: 14px; }
@@ -169,6 +176,11 @@ export function renderPage(mode: RunnerMode): string {
   nav.nav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
   .nav-tab { background: rgba(15,23,42,0.6); color: var(--muted); border: 1px solid rgba(60,231,252,0.2); border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; }
   .nav-tab.active { color: #04101f; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-color: transparent; }
+  .keygroup { border: 1px solid rgba(60,231,252,0.12); border-radius: 10px; padding: 12px; margin-bottom: 12px; background: rgba(15,23,42,0.35); }
+  .keygroup-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
+  .keygroup-sub { color: var(--faint); font-size: 11px; }
+  .kstatus { font-size: 11px; font-weight: 700; border-radius: 8px; padding: 2px 8px; border: 1px solid rgba(100,116,139,0.4); color: var(--faint); }
+  .kstatus.on { color: #4ade80; border-color: rgba(74,222,128,0.45); background: rgba(34,197,94,0.08); }
   .keys-line { font-size: 11px; color: var(--muted); margin: -6px 0 16px; }
   .keys-line b { color: var(--text); font-weight: 600; }
   .k-ok { color: #4ade80; } .k-absent { color: var(--faint); }
@@ -255,6 +267,11 @@ ${banner}
   </section>
 
   <section id="pageDashboard" style="display:none">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <span class="chip" id="dashCount">0 sequences</span>
+      <button class="tab" id="clearPaper" type="button">Clear finished simulated</button>
+      <button class="tab" id="clearAll" type="button">Clear all finished</button>
+    </div>
     <div id="sequences"></div>
   </section>
 
@@ -272,6 +289,14 @@ ${banner}
       <p style="margin-top:10px;font-size:10px;color:var(--faint)">
         How often the runner reconciles open sequences with the venue (orders and public prices). It does not change your Tradingale data usage.
       </p>
+      <div style="margin-top:14px;border-top:1px solid rgba(60,231,252,0.12);padding-top:12px">
+        <p style="font-size:12px;color:var(--muted)"><b>Paper or live?</b> <span id="modeExplain"></span></p>
+        <p style="margin-top:6px;font-size:10px;color:var(--faint)">
+          Switching to live is deliberately NOT a button here: no web page, and nothing you save in this UI, can make the runner place real orders.
+          Stop the server and relaunch it with <code style="color:var(--cyan)">RUNNER_MODE=live</code> in its environment (a service variable on Railway).
+          Live also requires the matching exchange keys, and paper stays the default everywhere else.
+        </p>
+      </div>
     </div>
   </div>
 
@@ -285,13 +310,40 @@ ${banner}
         Bonus: with Alpaca keys saved, US stock prices upgrade from the delayed feed to Alpaca live data.
         On Railway, mount a volume (RUNNER_STATE_DIR) so saved keys survive redeploys — or set them as service variables instead.
       </div>
-      <form class="controls" id="keysForm" autocomplete="off">
-        <div class="field"><label for="kTgl">Tradingale token</label><input id="kTgl" type="password" placeholder="unchanged" autocomplete="new-password"></div>
-        <div class="field"><label for="kKk">Kraken key</label><input id="kKk" type="password" placeholder="unchanged" autocomplete="new-password"></div>
-        <div class="field"><label for="kKs">Kraken secret</label><input id="kKs" type="password" placeholder="unchanged" autocomplete="new-password"></div>
-        <div class="field"><label for="kAk">Alpaca key id</label><input id="kAk" type="password" placeholder="unchanged" autocomplete="new-password"></div>
-        <div class="field"><label for="kAs">Alpaca secret</label><input id="kAs" type="password" placeholder="unchanged" autocomplete="new-password"></div>
-        <button class="primary" id="keysBtn" type="submit">Save keys</button>
+      <form id="keysForm" autocomplete="off">
+        <div class="keygroup">
+          <div class="keygroup-head">
+            <div><b>Tradingale data</b> <span class="keygroup-sub">REST API + MCP server — required for scores and sequences</span></div>
+            <span class="kstatus" id="stTgl">checking</span>
+          </div>
+          <div class="controls">
+            <div class="field" style="flex:1"><label for="kTgl">API token</label><input id="kTgl" type="password" placeholder="not set" autocomplete="new-password" style="width:100%;min-width:220px"></div>
+          </div>
+        </div>
+
+        <div class="keygroup">
+          <div class="keygroup-head">
+            <div><b>Crypto</b> <span class="keygroup-sub">Kraken — live crypto execution</span></div>
+            <span class="kstatus" id="stKraken">checking</span>
+          </div>
+          <div class="controls">
+            <div class="field"><label for="kKk">API key</label><input id="kKk" type="password" placeholder="not set" autocomplete="new-password"></div>
+            <div class="field"><label for="kKs">API secret</label><input id="kKs" type="password" placeholder="not set" autocomplete="new-password"></div>
+          </div>
+        </div>
+
+        <div class="keygroup">
+          <div class="keygroup-head">
+            <div><b>Stocks</b> <span class="keygroup-sub">Alpaca — live US stock execution, and live stock prices</span></div>
+            <span class="kstatus" id="stAlpaca">checking</span>
+          </div>
+          <div class="controls">
+            <div class="field"><label for="kAk">API key id</label><input id="kAk" type="password" placeholder="not set" autocomplete="new-password"></div>
+            <div class="field"><label for="kAs">API secret key</label><input id="kAs" type="password" placeholder="not set" autocomplete="new-password"></div>
+          </div>
+        </div>
+
+        <button class="primary" id="keysBtn" type="submit" style="margin-top:12px">Save keys</button>
       </form>
       <div class="msg" id="keysMsg"></div>
       <p style="margin-top:10px;font-size:10px;color:var(--faint)">
@@ -397,7 +449,8 @@ ${banner}
   }
 
   function renderSequence(seq) {
-    var card = el('div', 'card');
+    var isPaper = seq.venue === 'paper';
+    var card = el('div', 'card ' + (isPaper ? 'paper' : 'livecard'));
 
     var head = el('div', 'card-head');
     var title = el('h2');
@@ -415,7 +468,8 @@ ${banner}
     chips.style.flexWrap = 'wrap';
     chips.appendChild(el('span', 'chip mono', '$' + fmtPrice(seq.budget)));
     chips.appendChild(el('span', 'chip', seq.totalLevels + ' rounds'));
-    chips.appendChild(el('span', 'chip', seq.venue));
+    chips.appendChild(el('span', 'chip ' + (isPaper ? 'chip-paper' : 'chip-live'),
+      isPaper ? 'SIMULATED (paper)' : 'REAL ORDERS (' + seq.venue + ')'));
     chips.appendChild(phaseChip(seq.phase));
     if (seq.phase === 'running') {
       var stopBtn = el('button', 'stop', 'Stop');
@@ -426,6 +480,11 @@ ${banner}
       reverseBtn.type = 'button';
       reverseBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, true); });
       chips.appendChild(reverseBtn);
+    } else {
+      var delBtn = el('button', 'stop', 'Delete');
+      delBtn.type = 'button';
+      delBtn.addEventListener('click', function () { deleteSequence(seq.sequenceId); });
+      chips.appendChild(delBtn);
     }
     head.appendChild(chips);
     card.appendChild(head);
@@ -465,11 +524,23 @@ ${banner}
     if (cyc && document.activeElement !== cyc) cyc.value = String(Math.round(state.cycleMs / 60000));
     var chip = document.getElementById('modeChip');
     chip.textContent = state.mode === 'live' ? 'LIVE mode' : 'paper mode (default)';
+    chip.className = 'chip ' + (state.mode === 'live' ? 'chip-live' : 'chip-paper');
+    var explain = document.getElementById('modeExplain');
+    if (explain) {
+      explain.textContent = state.mode === 'live'
+        ? 'This runner is in LIVE mode: sequences you start place REAL orders on your own exchange account.'
+        : 'This runner is in PAPER mode: every sequence is simulated against live public prices. Nothing reaches an exchange.';
+    }
     var meta = 'mode ' + state.mode +
       (state.mode === 'live' ? (state.keysPresent ? ', Kraken keys detected' : ', Kraken keys MISSING') : '') +
       ', refreshed ' + new Date().toLocaleTimeString();
     document.getElementById('topMeta').textContent = meta;
     renderKeys(state.keys || {});
+
+    var running = state.sequences.filter(function (s) { return s.phase === 'running'; }).length;
+    var sim = state.sequences.filter(function (s) { return s.venue === 'paper'; }).length;
+    document.getElementById('dashCount').textContent =
+      state.sequences.length + ' sequence(s): ' + running + ' running, ' + sim + ' simulated';
 
     var host = document.getElementById('sequences');
     host.textContent = '';
@@ -481,22 +552,30 @@ ${banner}
   }
 
   function renderKeys(keys) {
-    var line = document.getElementById('keysLine');
-    line.textContent = '';
-    function part(label, ok) {
-      var span = el('span');
-      span.appendChild(el('b', null, label + ': '));
-      span.appendChild(el('span', ok ? 'k-ok' : 'k-absent', ok ? 'configured ✓' : 'absent'));
-      return span;
+    // Status per group + masked placeholders: a configured secret shows dots,
+    // never its value (the server only ever sends booleans).
+    function mark(id, ok, inputs) {
+      var node = document.getElementById(id);
+      if (node) {
+        node.textContent = ok ? 'verified ✓' : 'not set';
+        node.className = 'kstatus' + (ok ? ' on' : '');
+      }
+      (inputs || []).forEach(function (inputId) {
+        var input = document.getElementById(inputId);
+        if (input && !input.value) input.placeholder = ok ? '••••••••••••  (saved)' : 'not set';
+      });
     }
-    line.appendChild(part('Tradingale token', !!keys.tradingale));
-    line.appendChild(document.createTextNode('  ·  '));
-    line.appendChild(part('Kraken', !!keys.kraken));
-    line.appendChild(document.createTextNode('  ·  '));
-    line.appendChild(part('Alpaca', !!keys.alpaca));
+    mark('stTgl', !!keys.tradingale, ['kTgl']);
+    mark('stKraken', !!keys.kraken, ['kKk', 'kKs']);
+    mark('stAlpaca', !!keys.alpaca, ['kAk', 'kAs']);
+
+    var line = document.getElementById('keysLine');
+    if (!line) return;
+    line.textContent = '';
     var hint = el('span', 'keys-hint');
-    hint.appendChild(document.createTextNode('  — set them with '));
+    hint.appendChild(document.createTextNode('Keys stay on this machine. You can also set them with '));
     hint.appendChild(el('code', null, 'npm run runner -- keys'));
+    hint.appendChild(document.createTextNode('. They are never displayed again, logged, or served.'));
     line.appendChild(hint);
   }
 
@@ -655,7 +734,19 @@ ${banner}
     return fetch('/api/catalog' + (force ? '?refresh=1' : ''), { headers: { 'Accept': 'application/json' } })
       .then(function (res) { return res.json(); })
       .then(function (body) {
-        if (body && body.ok && body.instruments) { CATALOG = body.instruments; tabCounts(); renderCatalog(); }
+        if (body && body.ok && body.instruments) {
+          CATALOG = body.instruments;
+          tabCounts();
+          renderCatalog();
+          // Cold start: the very first call returns rows before the bulk
+          // price snapshot has landed. Poll briefly instead of leaving a
+          // priceless scoreboard on screen.
+          var priced = CATALOG.filter(function (r) { return r.price; }).length;
+          if (!priced && !force) {
+            document.getElementById('catEmpty').textContent = 'loading live prices...';
+            setTimeout(function () { fetchCatalog(); }, 2500);
+          }
+        }
         else { document.getElementById('catEmpty').textContent = (body && body.error) || 'Catalog unavailable.'; }
       })
       .catch(function () { document.getElementById('catEmpty').textContent = 'Catalog unavailable (server unreachable).'; });
@@ -703,6 +794,23 @@ ${banner}
       .catch(function () { showMsg('err', 'start failed: server unreachable'); })
       .then(function () { btn.disabled = false; });
   });
+
+  function deleteSequence(id) {
+    if (!window.confirm('Delete ' + id + ' from the dashboard? The sequence is finished; this only removes its file.')) return;
+    fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sequenceId: id }) })
+      .then(function (res) { return res.json(); })
+      .then(function (body) { if (!body.ok) window.alert(body.error || 'delete failed'); refresh(); })
+      .catch(function () { window.alert('delete failed: server unreachable'); });
+  }
+
+  function clearFinished(onlyPaper) {
+    var label = onlyPaper ? 'finished SIMULATED sequences' : 'ALL finished sequences';
+    if (!window.confirm('Remove ' + label + ' from the dashboard? Running sequences are kept.')) return;
+    fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true, onlyPaper: onlyPaper }) })
+      .then(function (res) { return res.json(); })
+      .then(function (body) { if (body.ok) window.alert('Removed ' + body.removed + ' sequence(s).'); refresh(); })
+      .catch(function () { window.alert('cleanup failed: server unreachable'); });
+  }
 
   function stopSequence(id, reverse) {
     var msg = reverse
@@ -769,6 +877,8 @@ ${banner}
       document.getElementById(navs[k]).className = 'nav-tab' + (k === name ? ' active' : '');
     });
   }
+  document.getElementById('clearPaper').addEventListener('click', function () { clearFinished(true); });
+  document.getElementById('clearAll').addEventListener('click', function () { clearFinished(false); });
   document.getElementById('navScoreboard').addEventListener('click', function () { showPage('scoreboard'); });
   document.getElementById('navDashboard').addEventListener('click', function () { showPage('dashboard'); });
   document.getElementById('navKeys').addEventListener('click', function () { showPage('keys'); });
