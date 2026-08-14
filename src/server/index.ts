@@ -44,6 +44,7 @@ import path from 'node:path';
 import { bulkCryptoPrices, bulkStockPrices, publicPrice } from '../runner/prices.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import { startingaleLabel } from '../runner/startingale.js';
+import { alertsConfigured, notify } from '../runner/notify.js';
 import { KEY_VARS, keysStatus, loadKeysIntoEnv, writeKeys, type KeyVar } from '../runner/keystore.js';
 import { renderPage } from './page.js';
 
@@ -399,6 +400,19 @@ const server = http.createServer(async (req, res) => {
       const hasCustom = Boolean(custom.deltaPrice || custom.nbRounds || custom.multipliers?.length);
       const preview = await previewSequence(symbol, budget, hasCustom ? custom : undefined);
       sendJson(res, 200, { ok: true, preview });
+      return;
+    }
+
+    if (route === 'POST /api/test-alert') {
+      if (!alertsConfigured()) {
+        sendJson(res, 400, { ok: false, error: 'Telegram alerts are not configured (bot token + chat id).' });
+        return;
+      }
+      const sent = await notify('Tradingale Runner: test alert. Alerts are wired correctly.');
+      sendJson(res, sent ? 200 : 502, {
+        ok: sent,
+        error: sent ? undefined : 'Telegram refused the message: check the bot token and chat id.',
+      });
       return;
     }
 

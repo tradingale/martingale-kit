@@ -403,6 +403,21 @@ ${banner}
           </div>
         </div>
 
+        <div class="keygroup">
+          <div class="keygroup-head">
+            <div><b>Alerts</b> <span class="keygroup-sub">Telegram — optional; the runner tells you what it did while you were away</span></div>
+            <span class="kstatus" id="stTelegram">checking</span>
+          </div>
+          <div class="controls">
+            <div class="field"><label for="kTgBot">Bot token</label><input id="kTgBot" type="password" placeholder="not set" autocomplete="new-password"></div>
+            <div class="field"><label for="kTgChat">Chat id</label><input id="kTgChat" type="password" placeholder="not set" autocomplete="new-password"></div>
+            <button class="tab" id="testAlert" type="button">Send test alert</button>
+          </div>
+          <p style="margin-top:8px;font-size:10px;color:var(--faint)">
+            Create a bot with @BotFather, then message it once and read your chat id from the API. Alerts fire on level reached, sequence complete, halt, start and stop; simulated runs are labelled SIMULATED.
+          </p>
+        </div>
+
         <button class="primary" id="keysBtn" type="submit" style="margin-top:12px">Save keys</button>
       </form>
       <div class="msg" id="keysMsg"></div>
@@ -649,6 +664,7 @@ ${banner}
     mark('stTgl', !!keys.tradingale, ['kTgl']);
     mark('stKraken', !!keys.kraken, ['kKk', 'kKs']);
     mark('stAlpaca', !!keys.alpaca, ['kAk', 'kAs']);
+    mark('stTelegram', !!keys.telegram, ['kTgBot', 'kTgChat']);
 
     var line = document.getElementById('keysLine');
     if (!line) return;
@@ -937,7 +953,7 @@ ${banner}
     var btn = document.getElementById('keysBtn');
     var box = document.getElementById('keysMsg');
     var payload = {};
-    var map = { kTgl: 'TRADINGALE_TOKEN', kKk: 'KRAKEN_API_KEY', kKs: 'KRAKEN_API_SECRET', kAk: 'ALPACA_API_KEY_ID', kAs: 'ALPACA_API_SECRET_KEY' };
+    var map = { kTgl: 'TRADINGALE_TOKEN', kKk: 'KRAKEN_API_KEY', kKs: 'KRAKEN_API_SECRET', kAk: 'ALPACA_API_KEY_ID', kAs: 'ALPACA_API_SECRET_KEY', kTgBot: 'TELEGRAM_BOT_TOKEN', kTgChat: 'TELEGRAM_CHAT_ID' };
     Object.keys(map).forEach(function (id) {
       var v = document.getElementById(id).value;
       if (v && v.trim()) payload[map[id]] = v.trim();
@@ -959,6 +975,20 @@ ${banner}
         }
       })
       .catch(function () { box.className = 'msg err'; box.textContent = 'save failed: server unreachable'; })
+      .then(function () { btn.disabled = false; });
+  });
+
+  document.getElementById('testAlert').addEventListener('click', function () {
+    var btn = this;
+    var box = document.getElementById('keysMsg');
+    btn.disabled = true;
+    fetch('/api/test-alert', { method: 'POST' })
+      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
+      .then(function (r) {
+        box.className = 'msg ' + (r.ok && r.body.ok ? 'ok' : 'err');
+        box.textContent = r.ok && r.body.ok ? 'Test alert sent: check Telegram.' : ((r.body && r.body.error) || 'test failed');
+      })
+      .catch(function () { box.className = 'msg err'; box.textContent = 'test failed: server unreachable'; })
       .then(function () { btn.disabled = false; });
   });
 

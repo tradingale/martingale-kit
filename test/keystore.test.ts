@@ -39,7 +39,7 @@ describe('keystore', () => {
     loadKeysIntoEnv();
     expect(process.env.TRADINGALE_TOKEN).toBe('tok');
     const status = keysStatus();
-    expect(status).toEqual({ tradingale: true, kraken: true, alpaca: false });
+    expect(status).toEqual({ tradingale: true, kraken: true, alpaca: false, telegram: false });
   });
 
   it('the real environment always wins over keys.env', () => {

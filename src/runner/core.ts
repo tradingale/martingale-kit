@@ -17,6 +17,7 @@ import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import type { Fill, LadderLevel, VenueGrids } from '../types.js';
 import { krakenPublicPrice, publicPrice } from './prices.js';
 import { deleteRun, listRuns, loadRun, saveRun, type RunnerFile } from './state.js';
+import { notify, tag } from './notify.js';
 
 export type RunnerMode = 'paper' | 'live';
 
@@ -353,6 +354,9 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
   log(
     `score ${instrument.martingaleScore ?? '?'} / startingale ${instrument.startingale ?? '?'} (descriptive metrics, not advice)`,
   );
+  void notify(
+    `${tag(file.venue)} ${sequenceId}\nStarted on ${symbol} at $${entry}: ${plan.ladder.levels.length} levels, $${budget} budget.`,
+  );
   return {
     sequenceId,
     symbol,
@@ -471,6 +475,21 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
         )
         .join('; ')
     : 'nothing to do';
+
+  // Alerts on the events worth waking up for: a deeper level filled, the
+  // sequence closing, or the engine halting. Fire and forget — notify()
+  // never throws, so a Telegram outage cannot disturb the cycle.
+  const previousLevel = file.state.deepestFilledLevel;
+  if (state.deepestFilledLevel > previousLevel) {
+    void notify(
+      `${tag(file.venue)} ${sequenceId}\nLevel ${state.deepestFilledLevel}/${file.plan.ladder.levels.length} reached on ${file.symbol} at $${price}.\nThe sell has been moved to the matching level.`,
+    );
+  }
+  if (state.phase === 'complete') {
+    void notify(`${tag(file.venue)} ${sequenceId}\nSequence complete on ${file.symbol}: the sell filled at level ${state.deepestFilledLevel}.`);
+  } else if (state.phase === 'halted') {
+    void notify(`${tag(file.venue)} ${sequenceId}\nHALTED on ${file.symbol}: ${state.haltReason ?? 'unknown reason'}\nCheck your venue.`);
+  }
 
   file.state = state;
   file.fills = snapshot.fills; // journal history, every venue
@@ -645,6 +664,11 @@ export async function stopSequence(
   file.lastCycleAt = new Date().toISOString();
   await savePaperState(file, venue);
   saveRun(file, sequenceId);
+
+  void notify(
+    `${tag(file.venue)} ${sequenceId}\nStopped on ${file.symbol}: ${canceledOrders} order(s) canceled` +
+      (reversed ? `, position market-sold (${reversedQuantity}).` : ', position kept.'),
+  );
 
   return {
     sequenceId,

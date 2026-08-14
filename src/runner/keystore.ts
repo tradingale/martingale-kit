@@ -20,6 +20,8 @@ export const KEY_VARS = [
   'ALPACA_API_KEY_ID',
   'ALPACA_API_SECRET_KEY',
   'ALPACA_PAPER',
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_CHAT_ID',
 ] as const;
 export type KeyVar = (typeof KEY_VARS)[number];
 const ALLOWED = new Set<string>(KEY_VARS);
@@ -101,6 +103,7 @@ export interface KeysStatus {
   tradingale: boolean;
   kraken: boolean;
   alpaca: boolean;
+  telegram: boolean;
 }
 
 /** Presence booleans only — the values themselves are never exposed. */
@@ -109,5 +112,6 @@ export function keysStatus(): KeysStatus {
     tradingale: Boolean(process.env.TRADINGALE_TOKEN),
     kraken: Boolean(process.env.KRAKEN_API_KEY && process.env.KRAKEN_API_SECRET),
     alpaca: Boolean(process.env.ALPACA_API_KEY_ID && process.env.ALPACA_API_SECRET_KEY),
+    telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
   };
 }
