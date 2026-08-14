@@ -176,6 +176,20 @@ export function renderPage(mode: RunnerMode): string {
   nav.nav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
   .nav-tab { background: rgba(15,23,42,0.6); color: var(--muted); border: 1px solid rgba(60,231,252,0.2); border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; }
   .nav-tab.active { color: #04101f; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-color: transparent; }
+  /* Journal: compact rows, expandable with the arrow. */
+  .jrow { border: 1px solid rgba(60,231,252,0.1); border-radius: 10px; margin-bottom: 6px; background: rgba(15,23,42,0.4); }
+  .jrow-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; flex-wrap: wrap; font-size: 12px; }
+  .jrow-head:hover { background: rgba(42,129,255,0.06); }
+  .jrow-arrow { color: var(--cyan); font-size: 11px; width: 12px; transition: transform 0.15s; }
+  .jrow.open .jrow-arrow { transform: rotate(90deg); }
+  .jrow-sym { font-weight: 800; min-width: 56px; }
+  .jrow-badge { font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; letter-spacing: 0.05em; }
+  .jrow-badge.sim { color: #fcd34d; background: rgba(180,83,9,0.25); }
+  .jrow-badge.live { color: #fecaca; background: rgba(127,29,29,0.35); }
+  .jrow-spacer { flex: 1; }
+  .jrow-body { display: none; padding: 0 10px 10px 32px; }
+  .jrow.open .jrow-body { display: block; }
+  .jsection-title { font-size: 12px; font-weight: 800; color: var(--cyan); letter-spacing: 0.05em; text-transform: uppercase; margin: 16px 0 8px; }
   .keygroup { border: 1px solid rgba(60,231,252,0.12); border-radius: 10px; padding: 12px; margin-bottom: 12px; background: rgba(15,23,42,0.35); }
   .keygroup-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
   .keygroup-sub { color: var(--faint); font-size: 11px; }
@@ -269,43 +283,53 @@ ${banner}
 
   <section id="pageDashboard" style="display:none">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-      <span class="chip" id="dashCount">0 sequences</span>
-      <button class="tab" id="clearPaper" type="button">Clear finished simulated</button>
-      <span style="font-size:10px;color:var(--faint)">Live sequences are permanent: see the Journal.</span>
+      <span class="chip" id="dashCount">0 active</span>
+      <span style="font-size:10px;color:var(--faint)">Active sequences only. Finished ones move to the Journal.</span>
     </div>
     <div id="sequences"></div>
   </section>
 
   <section id="pageJournal" style="display:none">
-    <div class="card">
-      <div class="card-head">
-        <h2>Metrics</h2>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <button class="tab active" id="jScopeAll" type="button">All</button>
-          <button class="tab" id="jScopeLive" type="button">Live</button>
-          <button class="tab" id="jScopePaper" type="button">Simulated</button>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <button class="tab active" id="jTabMetrics" type="button">Metrics</button>
+      <button class="tab" id="jTabHistory" type="button">History</button>
+      <span style="flex:1"></span>
+      <button class="tab active" id="jScopeAll" type="button">All</button>
+      <button class="tab" id="jScopeLive" type="button">Live</button>
+      <button class="tab" id="jScopePaper" type="button">Simulated</button>
+    </div>
+
+    <div id="jPaneMetrics">
+      <div class="card">
+        <div class="card-head">
+          <h2>Performance</h2>
+          <button class="tab" id="jExpand" type="button">View more metrics &#9662;</button>
         </div>
-      </div>
-      <div class="card-body">
-        <div class="stats" id="jMetrics"></div>
-        <p style="margin-top:10px;font-size:10px;color:var(--faint)" id="jScopeNote"></p>
+        <div class="card-body">
+          <div class="stats" id="jHeadline"></div>
+          <div id="jDetail" style="display:none"></div>
+          <p style="margin-top:10px;font-size:10px;color:var(--faint)" id="jScopeNote"></p>
+        </div>
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-head"><h2>Sequence history</h2><span class="chip" id="jCount">0</span></div>
-      <div class="card-body">
-        <div class="cat-wrap" style="max-height:none">
-          <table class="cat">
-            <thead><tr><th>Sequence</th><th>Mode</th><th>Phase</th><th>Rounds</th><th>Capital used</th><th>Realized</th><th>On used</th><th>Duration</th></tr></thead>
-            <tbody id="jBody"></tbody>
-          </table>
+    <div id="jPaneHistory" style="display:none">
+      <div class="card">
+        <div class="card-head">
+          <h2>Sequence history</h2>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span class="chip" id="jCount">0</span>
+            <button class="tab" id="clearPaper" type="button">Clear finished simulated</button>
+          </div>
         </div>
-        <div class="cat-empty" id="jEmpty">loading journal...</div>
-        <p style="margin-top:10px;font-size:10px;color:var(--faint)">
-          Realized figures come from this runner's own fill history, on the portion actually sold, before fees and slippage.
-          Simulated results do not represent actual trading. Live sequences are kept permanently and cannot be deleted.
-        </p>
+        <div class="card-body">
+          <div id="jRows"></div>
+          <div class="cat-empty" id="jEmpty">loading journal...</div>
+          <p style="margin-top:10px;font-size:10px;color:var(--faint)">
+            Realized figures come from this runner's own fill history, on the portion actually sold, before fees and slippage.
+            Simulated results do not represent actual trading. Live sequences are kept permanently and cannot be deleted.
+          </p>
+        </div>
       </div>
     </div>
   </section>
@@ -515,11 +539,6 @@ ${banner}
       reverseBtn.type = 'button';
       reverseBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, true); });
       chips.appendChild(reverseBtn);
-    } else {
-      var delBtn = el('button', 'stop', 'Delete');
-      delBtn.type = 'button';
-      delBtn.addEventListener('click', function () { deleteSequence(seq.sequenceId); });
-      chips.appendChild(delBtn);
     }
     head.appendChild(chips);
     card.appendChild(head);
@@ -572,18 +591,23 @@ ${banner}
     document.getElementById('topMeta').textContent = meta;
     renderKeys(state.keys || {});
 
-    var running = state.sequences.filter(function (s) { return s.phase === 'running'; }).length;
-    var sim = state.sequences.filter(function (s) { return s.venue === 'paper'; }).length;
+    // The dashboard is the live cockpit: ACTIVE sequences only. Anything
+    // finished belongs to the Journal, with its metrics.
+    var activeSeqs = state.sequences.filter(function (s) { return s.phase === 'running'; });
+    var simCount = activeSeqs.filter(function (s) { return s.venue === 'paper'; }).length;
     document.getElementById('dashCount').textContent =
-      state.sequences.length + ' sequence(s): ' + running + ' running, ' + sim + ' simulated';
+      activeSeqs.length + ' active (' + simCount + ' simulated, ' + (activeSeqs.length - simCount) + ' live)';
 
     var host = document.getElementById('sequences');
     host.textContent = '';
-    if (!state.sequences.length) {
-      host.appendChild(el('div', 'empty', 'No sequences yet. Start one above; paper mode fills against live public prices with zero keys.'));
+    if (!activeSeqs.length) {
+      var done = state.sequences.length;
+      host.appendChild(el('div', 'empty', done
+        ? 'No active sequence. ' + done + ' finished one(s) are in the Journal.'
+        : 'No sequences yet. Pick an instrument on the Scoreboard; paper mode fills against live public prices with zero keys.'));
       return;
     }
-    for (var i = 0; i < state.sequences.length; i++) host.appendChild(renderSequence(state.sequences[i]));
+    for (var i = 0; i < activeSeqs.length; i++) host.appendChild(renderSequence(activeSeqs[i]));
   }
 
   function renderKeys(keys) {
@@ -834,7 +858,7 @@ ${banner}
     if (!window.confirm('Delete ' + id + ' from the dashboard? The sequence is finished; this only removes its file.')) return;
     fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sequenceId: id }) })
       .then(function (res) { return res.json(); })
-      .then(function (body) { if (!body.ok) window.alert(body.error || 'delete failed'); refresh(); })
+      .then(function (body) { if (!body.ok) window.alert(body.error || 'delete failed'); refresh(); fetchJournal(); })
       .catch(function () { window.alert('delete failed: server unreachable'); });
   }
 
@@ -842,7 +866,7 @@ ${banner}
     if (!window.confirm('Remove finished SIMULATED sequences from the dashboard? Running and live sequences are kept.')) return;
     fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }) })
       .then(function (res) { return res.json(); })
-      .then(function (body) { if (body.ok) window.alert('Removed ' + body.removed + ' sequence(s).'); refresh(); })
+      .then(function (body) { if (body.ok) window.alert('Removed ' + body.removed + ' sequence(s).'); refresh(); fetchJournal(); })
       .catch(function () { window.alert('cleanup failed: server unreachable'); });
   }
 
@@ -937,21 +961,61 @@ ${banner}
       .catch(function () { document.getElementById('jEmpty').textContent = 'journal unavailable'; });
   }
 
+  function money(v) { return (v >= 0 ? '+$' : '-$') + fmtPrice(Math.abs(v)); }
+  function pct(v) { return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%'; }
+
+  function section(host, title) {
+    host.appendChild(el('div', 'jsection-title', title));
+    var grid = el('div', 'stats');
+    host.appendChild(grid);
+    return grid;
+  }
+
   function renderJournal(body) {
     var m = body.metrics;
-    var host = document.getElementById('jMetrics');
-    host.textContent = '';
-    host.appendChild(stat('Realized P/L', (m.totalRealized >= 0 ? '+$' : '-$') + fmtPrice(Math.abs(m.totalRealized))));
-    host.appendChild(stat('Win rate', m.winRateDenominator ? m.winRatePct.toFixed(0) + '%  (' + m.winRateNumerator + '/' + m.winRateDenominator + ')' : '—'));
-    host.appendChild(stat('Closed', m.closedCount + '  (' + m.completedCount + ' completed, ' + m.canceledCount + ' canceled)'));
-    host.appendChild(stat('Avg on capital used', (m.avgRealizedPctOnUsed >= 0 ? '+' : '') + m.avgRealizedPctOnUsed.toFixed(2) + '%'));
-    host.appendChild(stat('Avg on budget', (m.avgRealizedPctOnBudget >= 0 ? '+' : '') + m.avgRealizedPctOnBudget.toFixed(2) + '%'));
-    host.appendChild(stat('Capital efficiency', m.capitalEfficiencyPct.toFixed(1) + '%'));
-    host.appendChild(stat('Avg capital used', '$' + fmtPrice(m.avgCapitalUsed)));
-    host.appendChild(stat('Avg rounds', m.avgRounds.toFixed(2)));
-    host.appendChild(stat('Max-round sequences', String(m.maxRoundCount)));
-    host.appendChild(stat('Avg duration', fmtDur(m.avgDurationMs)));
-    host.appendChild(stat('Active', m.activeCount + '  ($' + fmtPrice(m.activeCapital) + ' deployed)'));
+
+    // Headline: the three cards the site shows before you expand.
+    var head = document.getElementById('jHeadline');
+    head.textContent = '';
+    head.appendChild(stat('Total performance', money(m.totalRealized)));
+    head.appendChild(stat('Efficiency', fmtDur(m.avgDurationMs) + ' avg'));
+    head.appendChild(stat('Active portfolio', m.activeCount + ' seq · $' + fmtPrice(m.activeCapital)));
+
+    // Detail: the five sections behind the toggle.
+    var d = document.getElementById('jDetail');
+    d.textContent = '';
+
+    var g1 = section(d, 'Profit performance');
+    g1.appendChild(stat('All time', money(m.totalRealized) + '  (' + pct(m.capitalIncreasePct) + ')'));
+    g1.appendChild(stat('This month', money(m.monthlyRealized) + '  (' + pct(m.monthlyPct) + ')'));
+    g1.appendChild(stat('Year to date', money(m.ytdRealized) + '  (' + pct(m.ytdPct) + ')'));
+    g1.appendChild(stat('Canceled early', money(m.canceledRealized) + '  (' + m.canceledCount + ' seq)'));
+
+    var g2 = section(d, 'Sequence analytics');
+    g2.appendChild(stat('Closed sequences', m.closedCount + '  (' + m.completedCount + ' completed)'));
+    g2.appendChild(stat('Average per sequence', pct(m.avgPctPerSequence)));
+    g2.appendChild(stat('Average duration', fmtDur(m.avgDurationMs)));
+    g2.appendChild(stat('Capital efficiency', pct(m.capitalEfficiencyPct)));
+    g2.appendChild(stat('Average capital used', '$' + fmtPrice(m.avgCapitalUsed)));
+
+    var g3 = section(d, 'Projections (theoretical)');
+    g3.appendChild(stat('Simple annual return', pct(m.projectedAnnualReturnPct)));
+    g3.appendChild(stat('Compounded annual', pct(m.compoundedAnnualReturnPct)));
+    g3.appendChild(stat('10-year projection', m.tenYearMultiplier ? 'x' + m.tenYearMultiplier.toFixed(0) : '—'));
+
+    var g4 = section(d, 'Risk management');
+    g4.appendChild(stat('True win rate', m.winRateDenominator ? m.winRatePct.toFixed(0) + '%  (' + m.winRateNumerator + '/' + m.winRateDenominator + ')' : '—'));
+    g4.appendChild(stat('Risk exposure', m.avgRiskExposurePct.toFixed(1) + '%'));
+    g4.appendChild(stat('Apex risk ratio', m.apexRiskRatioPct.toFixed(2) + '%  (' + m.maxRoundCount + ')'));
+    g4.appendChild(stat('Round efficiency', m.roundEfficiency.toFixed(1)));
+
+    var g5 = section(d, 'Active portfolio');
+    g5.appendChild(stat('Live sequences', m.activeCount + '  ($' + fmtPrice(m.activeCapital) + ' deployed)'));
+    g5.appendChild(stat('Active exposure', m.activeExposurePct.toFixed(1) + '%'));
+
+    var proj = el('p', null, 'Projections are arithmetic on the observed average sequence: they assume the same average outcome repeats at the same pace. They are not forecasts.');
+    proj.style.cssText = 'margin-top:10px;font-size:10px;color:var(--faint)';
+    d.appendChild(proj);
 
     document.getElementById('jScopeNote').textContent = body.scope === 'all'
       ? 'All sequences, simulated and live together. Use the Live / Simulated filters to read them apart.'
@@ -959,28 +1023,53 @@ ${banner}
         ? 'Live sequences only: real orders on your own account.'
         : 'Simulated sequences only. Simulated results do not represent actual trading.';
 
+    // History: compact rows, details behind the arrow.
     var rows = body.entries || [];
     document.getElementById('jCount').textContent = rows.length + ' sequence(s)';
-    var tb = document.getElementById('jBody');
-    tb.textContent = '';
+    var host = document.getElementById('jRows');
+    host.textContent = '';
     document.getElementById('jEmpty').textContent = rows.length ? '' : 'No sequences yet.';
     rows.forEach(function (e) {
-      var tr = document.createElement('tr');
-      var td0 = el('td', 'mono');
-      td0.appendChild(el('span', 'cat-sym', e.symbol));
-      td0.appendChild(el('div', null, e.sequenceId));
-      td0.lastChild.style.fontSize = '9px';
-      td0.lastChild.style.color = 'var(--faint)';
-      tr.appendChild(td0);
-      tr.appendChild(el('td', e.live ? 'sg-misaligned' : 'sg-moderate', e.live ? 'LIVE ' + e.venue : 'simulated'));
-      tr.appendChild(el('td', null, e.phase));
-      tr.appendChild(el('td', 'mono', e.roundsReached + '/' + e.totalRounds));
-      tr.appendChild(el('td', 'mono', '$' + fmtPrice(e.capitalUsed)));
-      tr.appendChild(el('td', 'mono ' + (e.realized >= 0 ? 'sg-strong' : 'sg-misaligned'),
-        (e.realized >= 0 ? '+$' : '-$') + fmtPrice(Math.abs(e.realized))));
-      tr.appendChild(el('td', 'mono', (e.realizedPctOnUsed >= 0 ? '+' : '') + e.realizedPctOnUsed.toFixed(2) + '%'));
-      tr.appendChild(el('td', 'mono', fmtDur(e.durationMs)));
-      tb.appendChild(tr);
+      var row = el('div', 'jrow');
+      var head2 = el('div', 'jrow-head');
+      head2.appendChild(el('span', 'jrow-arrow', '▶'));
+      head2.appendChild(el('span', 'jrow-sym mono', e.symbol));
+      head2.appendChild(el('span', 'jrow-badge ' + (e.live ? 'live' : 'sim'), e.live ? 'LIVE' : 'SIM'));
+      head2.appendChild(el('span', null, e.phase));
+      head2.appendChild(el('span', 'jrow-spacer'));
+      head2.appendChild(el('span', 'mono ' + (e.realized >= 0 ? 'sg-strong' : 'sg-misaligned'), money(e.realized)));
+      head2.appendChild(el('span', 'mono', pct(e.realizedPctOnUsed)));
+      head2.appendChild(el('span', 'mono', fmtDur(e.durationMs)));
+      head2.addEventListener('click', function () { row.className = row.className.indexOf('open') >= 0 ? 'jrow' : 'jrow open'; });
+      row.appendChild(head2);
+
+      var body2 = el('div', 'jrow-body');
+      var grid = el('div', 'stats');
+      grid.appendChild(stat('Sequence', e.sequenceId));
+      grid.appendChild(stat('Venue', e.live ? e.venue + ' (real orders)' : 'paper (simulated)'));
+      grid.appendChild(stat('Rounds reached', e.roundsReached + ' / ' + e.totalRounds));
+      grid.appendChild(stat('Budget', '$' + fmtPrice(e.budget)));
+      grid.appendChild(stat('Capital used', '$' + fmtPrice(e.capitalUsed)));
+      grid.appendChild(stat('Proceeds', '$' + fmtPrice(e.proceeds)));
+      grid.appendChild(stat('Realized', money(e.realized)));
+      grid.appendChild(stat('On budget', pct(e.realizedPctOnBudget)));
+      if (e.openQuantity > 0) grid.appendChild(stat('Position kept', fmtQty(e.openQuantity) + ' ' + e.symbol));
+      grid.appendChild(stat('Started', new Date(e.startedAt).toLocaleString()));
+      grid.appendChild(stat('Ended', e.endedAt ? new Date(e.endedAt).toLocaleString() : 'running'));
+      body2.appendChild(grid);
+      // Simulated runs can be removed; live history is permanent.
+      if (!e.live && e.phase !== 'running') {
+        var del = el('button', 'stop', 'Delete this simulated run');
+        del.type = 'button';
+        del.addEventListener('click', function () { deleteSequence(e.sequenceId); });
+        body2.appendChild(del);
+      } else if (e.live) {
+        var note = el('p', null, 'Live sequence: kept permanently, cannot be deleted.');
+        note.style.cssText = 'font-size:10px;color:var(--faint);margin-top:6px';
+        body2.appendChild(note);
+      }
+      row.appendChild(body2);
+      host.appendChild(row);
     });
   }
   document.getElementById('clearPaper').addEventListener('click', function () { clearFinished(); });
@@ -988,6 +1077,20 @@ ${banner}
   document.getElementById('navDashboard').addEventListener('click', function () { showPage('dashboard'); });
   document.getElementById('navJournal').addEventListener('click', function () { showPage('journal'); });
   document.getElementById('navKeys').addEventListener('click', function () { showPage('keys'); });
+  function journalPane(which) {
+    document.getElementById('jPaneMetrics').style.display = which === 'metrics' ? '' : 'none';
+    document.getElementById('jPaneHistory').style.display = which === 'history' ? '' : 'none';
+    document.getElementById('jTabMetrics').className = 'tab' + (which === 'metrics' ? ' active' : '');
+    document.getElementById('jTabHistory').className = 'tab' + (which === 'history' ? ' active' : '');
+  }
+  document.getElementById('jTabMetrics').addEventListener('click', function () { journalPane('metrics'); });
+  document.getElementById('jTabHistory').addEventListener('click', function () { journalPane('history'); });
+  document.getElementById('jExpand').addEventListener('click', function () {
+    var d = document.getElementById('jDetail');
+    var open = d.style.display !== 'none';
+    d.style.display = open ? 'none' : '';
+    this.innerHTML = open ? 'View more metrics &#9662;' : 'Fewer metrics &#9652;';
+  });
   document.getElementById('jScopeAll').addEventListener('click', function () { setScope('all'); });
   document.getElementById('jScopeLive').addEventListener('click', function () { setScope('live'); });
   document.getElementById('jScopePaper').addEventListener('click', function () { setScope('paper'); });

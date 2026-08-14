@@ -731,26 +731,52 @@ export function journal(): JournalEntry[] {
   return entries.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
 }
 
+/**
+ * The dashboard metric set, ported from the Tradingale site's
+ * PerformanceOverview: three headline figures, then five sections behind
+ * the expand toggle (profit, analytics, projections, risk, active).
+ * Everything is derived from this runner's own fill history.
+ */
 export interface JournalMetrics {
-  closedCount: number;
-  completedCount: number;
-  canceledCount: number;
-  activeCount: number;
+  // Headline
   totalRealized: number;
-  /** Profitable closed sequences over closed sequences (the site's true win rate). */
+  capitalIncreasePct: number;
+  completedCount: number;
+  avgPctPerSequence: number;
+  avgDurationMs: number | null;
+  avgRiskExposurePct: number;
+  roundEfficiency: number;
+  activeCount: number;
+  activeCapital: number;
+  activeExposurePct: number;
+
+  // Profit performance
+  monthlyRealized: number;
+  monthlyPct: number;
+  ytdRealized: number;
+  ytdPct: number;
+  canceledCount: number;
+  canceledRealized: number;
+  canceledPct: number;
+
+  // Sequence analytics
+  closedCount: number;
+  capitalEfficiencyPct: number;
+  avgCapitalUsed: number;
+  avgRealizedPctOnUsed: number;
+  avgRealizedPctOnBudget: number;
+
+  // Projections (theoretical, from the observed average sequence)
+  projectedAnnualReturnPct: number;
+  compoundedAnnualReturnPct: number;
+  tenYearMultiplier: number;
+
+  // Risk
   winRatePct: number;
   winRateNumerator: number;
   winRateDenominator: number;
-  avgRealizedPctOnUsed: number;
-  avgRealizedPctOnBudget: number;
-  avgCapitalUsed: number;
-  /** Capital actually deployed over capital allocated, in percent. */
-  capitalEfficiencyPct: number;
-  avgRounds: number;
-  /** Sequences that reached their deepest level (the site's apex ratio). */
+  apexRiskRatioPct: number;
   maxRoundCount: number;
-  avgDurationMs: number | null;
-  activeCapital: number;
 }
 
 /**
@@ -766,26 +792,75 @@ export function journalMetrics(scope: 'live' | 'paper' | 'all' = 'all'): Journal
   const durations = closed.map((e) => e.durationMs).filter((d): d is number => typeof d === 'number' && d > 0);
   const avg = (nums: number[]): number => (nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : 0);
 
+  const totalBudget = closed.reduce((sum, e) => sum + e.budget, 0);
+  const totalRealized = closed.reduce((sum, e) => sum + e.realized, 0);
+  const avgPctPerSequence = avg(closed.map((e) => e.realizedPctOnBudget));
+  const avgDurationMs = durations.length ? avg(durations) : null;
+
+  // Windowed slices, by the day a sequence closed.
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const yearStart = new Date(now.getFullYear(), 0, 1).getTime();
+  const closedSince = (from: number): JournalEntry[] =>
+    closed.filter((e) => e.endedAt && Date.parse(e.endedAt) >= from);
+  const monthly = closedSince(monthStart);
+  const ytd = closedSince(yearStart);
+  const sumRealized = (list: JournalEntry[]): number => list.reduce((s, e) => s + e.realized, 0);
+  const pctOn = (list: JournalEntry[]): number => {
+    const budget = list.reduce((s, e) => s + e.budget, 0);
+    return budget > 0 ? (sumRealized(list) / budget) * 100 : 0;
+  };
+  const canceled = closed.filter((e) => e.phase === 'canceled');
+
+  // Projections are pure arithmetic on the observed average sequence, and
+  // are theoretical by construction: they assume the same average outcome
+  // repeats at the same pace. Guarded so a missing duration yields 0.
+  const avgDurationDays = avgDurationMs ? avgDurationMs / 86_400_000 : 0;
+  const cyclesPerYear = avgDurationDays > 0 ? 365 / avgDurationDays : 0;
+  const growth = 1 + avgPctPerSequence / 100;
+  const compounded = cyclesPerYear > 0 && growth > 0 ? (Math.pow(growth, cyclesPerYear) - 1) * 100 : 0;
+  const tenYear = cyclesPerYear > 0 && growth > 0 ? Math.pow(growth, cyclesPerYear * 10) : 0;
+
   return {
-    closedCount: closed.length,
+    totalRealized,
+    capitalIncreasePct: totalBudget > 0 ? (totalRealized / totalBudget) * 100 : 0,
     completedCount: closed.filter((e) => e.phase === 'complete').length,
-    canceledCount: closed.filter((e) => e.phase === 'canceled').length,
+    avgPctPerSequence,
+    avgDurationMs,
+    avgRiskExposurePct: avg(closed.map((e) => (e.budget > 0 ? (e.capitalUsed / e.budget) * 100 : 0))),
+    roundEfficiency: avg(closed.map((e) => e.roundsReached)),
     activeCount: active.length,
-    totalRealized: closed.reduce((sum, e) => sum + e.realized, 0),
+    activeCapital: active.reduce((sum, e) => sum + e.capitalUsed, 0),
+    activeExposurePct: (() => {
+      const budget = active.reduce((sum, e) => sum + e.budget, 0);
+      return budget > 0 ? (active.reduce((s, e) => s + e.capitalUsed, 0) / budget) * 100 : 0;
+    })(),
+
+    monthlyRealized: sumRealized(monthly),
+    monthlyPct: pctOn(monthly),
+    ytdRealized: sumRealized(ytd),
+    ytdPct: pctOn(ytd),
+    canceledCount: canceled.length,
+    canceledRealized: sumRealized(canceled),
+    canceledPct: pctOn(canceled),
+
+    closedCount: closed.length,
+    capitalEfficiencyPct: avg(closed.map((e) => e.realizedPctOnUsed)),
+    avgCapitalUsed: avg(closed.map((e) => e.capitalUsed)),
+    avgRealizedPctOnUsed: avg(closed.map((e) => e.realizedPctOnUsed)),
+    avgRealizedPctOnBudget: avgPctPerSequence,
+
+    projectedAnnualReturnPct: avgPctPerSequence * cyclesPerYear,
+    compoundedAnnualReturnPct: compounded,
+    tenYearMultiplier: tenYear,
+
     winRatePct: closed.length ? (wins.length / closed.length) * 100 : 0,
     winRateNumerator: wins.length,
     winRateDenominator: closed.length,
-    avgRealizedPctOnUsed: avg(closed.map((e) => e.realizedPctOnUsed)),
-    avgRealizedPctOnBudget: avg(closed.map((e) => e.realizedPctOnBudget)),
-    avgCapitalUsed: avg(closed.map((e) => e.capitalUsed)),
-    capitalEfficiencyPct: (() => {
-      const budget = closed.reduce((sum, e) => sum + e.budget, 0);
-      return budget > 0 ? (closed.reduce((sum, e) => sum + e.capitalUsed, 0) / budget) * 100 : 0;
-    })(),
-    avgRounds: avg(closed.map((e) => e.roundsReached)),
+    apexRiskRatioPct: closed.length
+      ? (closed.filter((e) => e.roundsReached >= e.totalRounds).length / closed.length) * 100
+      : 0,
     maxRoundCount: closed.filter((e) => e.roundsReached >= e.totalRounds).length,
-    avgDurationMs: durations.length ? avg(durations) : null,
-    activeCapital: active.reduce((sum, e) => sum + e.capitalUsed, 0),
   };
 }
 
