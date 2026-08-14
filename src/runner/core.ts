@@ -472,6 +472,40 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
   };
 }
 
+/**
+ * Manual repair of the active sell, the local equivalent of the site's
+ * update-sell action: cancel whatever sell is resting, then reconcile so
+ * the engine re-places the correct template for the level actually reached.
+ * Useful when a venue rejected or expired the order, or after fixing keys.
+ * The buy ladder is never touched.
+ */
+export async function resyncSell(sequenceId: string, log: Logger = () => {}): Promise<CycleSummary> {
+  const file = loadRun(sequenceId);
+  if (!file) throw new Error(`unknown sequence ${sequenceId}`);
+  if (file.state.phase !== 'running') throw new Error(`sequence is ${file.state.phase}, not running`);
+
+  const { venue } = await buildVenue(file, sequenceId);
+  const open = await venue.getOpenOrders();
+  let canceled = 0;
+  for (const order of open) {
+    if (order.side !== 'sell') continue;
+    try {
+      await venue.cancelOrder(order.clientId);
+      canceled++;
+      log(`${sequenceId}: resync, canceled sell ${order.clientId}`);
+    } catch (error) {
+      log(`${sequenceId}: resync could not cancel ${order.clientId}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  if (venue instanceof PaperAdapter) {
+    await savePaperState(file, venue);
+    saveRun(file, sequenceId);
+  }
+  if (canceled === 0) log(`${sequenceId}: no resting sell to resync; reconciling anyway`);
+  // The next reconciliation places the right template again.
+  return cycleSequence(sequenceId, log);
+}
+
 /** One pass over every persisted sequence, strictly sequential. */
 export async function cycleAll(log: Logger = () => {}): Promise<CycleSummary[]> {
   const summaries: CycleSummary[] = [];

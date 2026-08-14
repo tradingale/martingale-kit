@@ -286,6 +286,7 @@ ${banner}
       <span class="chip" id="dashCount">0 active</span>
       <span style="font-size:10px;color:var(--faint)">Active sequences only. Finished ones move to the Journal.</span>
     </div>
+    <div id="dashChecks" style="font-size:11px;color:var(--muted);margin:-6px 0 14px"></div>
     <div id="sequences"></div>
   </section>
 
@@ -531,6 +532,14 @@ ${banner}
       isPaper ? 'SIMULATED (paper)' : 'REAL ORDERS (' + seq.venue + ')'));
     chips.appendChild(phaseChip(seq.phase));
     if (seq.phase === 'running') {
+      var checkBtn = el('button', 'tab', 'Check now');
+      checkBtn.type = 'button';
+      checkBtn.addEventListener('click', function () { checkNow(seq.sequenceId, this); });
+      chips.appendChild(checkBtn);
+      var resyncBtn = el('button', 'tab', 'Resync sell');
+      resyncBtn.type = 'button';
+      resyncBtn.addEventListener('click', function () { resyncSell(seq.sequenceId, this); });
+      chips.appendChild(resyncBtn);
       var stopBtn = el('button', 'stop', 'Stop');
       stopBtn.type = 'button';
       stopBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, false); });
@@ -555,7 +564,8 @@ ${banner}
     stats.appendChild(stat('Level reached', seq.deepestFilledLevel + ' / ' + seq.totalLevels));
     stats.appendChild(stat('Budget', '$' + fmtPrice(seq.budget)));
     stats.appendChild(stat('Live price', seq.lastPrice === null ? 'waiting' : '$' + fmtPrice(seq.lastPrice)));
-    stats.appendChild(stat('Venue', seq.venue === 'kraken' ? 'kraken (live)' : 'paper (simulated)'));
+    stats.appendChild(stat('Venue', seq.venue === 'paper' ? 'paper (simulated)' : seq.venue + ' (live)'));
+    stats.appendChild(stat('Last check', seq.lastCycleAt ? new Date(seq.lastCycleAt).toLocaleTimeString() : 'not yet'));
     body.appendChild(stats);
 
     var ladder = el('div', 'ladder');
@@ -597,6 +607,17 @@ ${banner}
     var simCount = activeSeqs.filter(function (s) { return s.venue === 'paper'; }).length;
     document.getElementById('dashCount').textContent =
       activeSeqs.length + ' active (' + simCount + ' simulated, ' + (activeSeqs.length - simCount) + ' live)';
+
+    // Automatic checks: prove they are running, and say when the next is due.
+    var checkLine = document.getElementById('dashChecks');
+    if (checkLine) {
+      var last = state.lastPassAt ? new Date(state.lastPassAt).toLocaleTimeString() : 'not yet';
+      var nextIn = state.nextPassAt ? Math.max(0, Math.round((Date.parse(state.nextPassAt) - Date.now()) / 60000)) : null;
+      checkLine.textContent = state.checking
+        ? 'Automatic checks: running now...'
+        : 'Automatic checks every ' + Math.round(state.cycleMs / 60000) + ' min · last ' + last +
+          (nextIn === null ? '' : ' · next in ~' + nextIn + ' min');
+    }
 
     var host = document.getElementById('sequences');
     host.textContent = '';
@@ -853,6 +874,25 @@ ${banner}
       .catch(function () { showMsg('err', 'start failed: server unreachable'); })
       .then(function () { btn.disabled = false; });
   });
+
+  function postAction(url, id, btn, label) {
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sequenceId: id }) })
+      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
+      .then(function (r) {
+        if (!(r.ok && r.body.ok)) window.alert((r.body && r.body.error) || 'action failed');
+        refresh();
+      })
+      .catch(function () { window.alert('action failed: server unreachable'); })
+      .then(function () { if (btn) { btn.disabled = false; btn.textContent = label; } });
+  }
+
+  function checkNow(id, btn) { postAction('/api/check', id, btn, 'Check now'); }
+
+  function resyncSell(id, btn) {
+    if (!window.confirm('Resync the sell for ' + id + '? The resting sell is canceled and re-placed from the plan for the level actually reached. The buy ladder is untouched.')) return;
+    postAction('/api/resync-sell', id, btn, 'Resync sell');
+  }
 
   function deleteSequence(id) {
     if (!window.confirm('Delete ' + id + ' from the dashboard? The sequence is finished; this only removes its file.')) return;

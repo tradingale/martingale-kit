@@ -27,9 +27,11 @@ import {
   cycleAll,
   deleteFinished,
   deleteSequence,
+  cycleSequence,
   journal,
   journalMetrics,
   krakenKeysPresent,
+  resyncSell,
   previewSequence,
   runnerMode,
   startSequence,
@@ -258,6 +260,11 @@ function stateBody(): unknown {
     keysPresent: krakenKeysPresent(), // boolean only; the keys themselves are never served
     keys: keysStatus(), // { tradingale, kraken, alpaca } booleans, never the values
     cycleMs,
+    // Automatic checks: when the last reconciliation pass ran, when the next
+    // one is due, and whether one is running right now.
+    lastPassAt,
+    nextPassAt,
+    checking: cycling,
     now: new Date().toISOString(),
     sequences,
   };
@@ -289,6 +296,9 @@ let cycleTimer: ReturnType<typeof setInterval> | null = null;
 function armCycleTimer(): void {
   if (cycleTimer) clearInterval(cycleTimer);
   cycleTimer = setInterval(() => void runCyclePass('interval'), cycleMs);
+  // Announce the next check straight away, so the dashboard shows a
+  // countdown from boot instead of an empty line.
+  nextPassAt = new Date(Date.now() + cycleMs).toISOString();
 }
 function setCycleMinutes(minutes: number): void {
   cycleMs = Math.round(Math.max(1, minutes) * 60 * 1000);
@@ -297,6 +307,8 @@ function setCycleMinutes(minutes: number): void {
 }
 
 let cycling = false;
+let lastPassAt: string | null = null;
+let nextPassAt: string | null = null;
 async function runCyclePass(reason: string): Promise<void> {
   if (cycling) {
     log(`skip ${reason} pass: previous pass still running`);
@@ -305,10 +317,12 @@ async function runCyclePass(reason: string): Promise<void> {
   cycling = true;
   try {
     await cycleAll(log);
+    lastPassAt = new Date().toISOString();
   } catch (error) {
     log(`cycle pass error: ${error instanceof Error ? error.message : error}`);
   } finally {
     cycling = false;
+    nextPassAt = new Date(Date.now() + cycleMs).toISOString();
   }
 }
 
@@ -385,6 +399,32 @@ const server = http.createServer(async (req, res) => {
       const hasCustom = Boolean(custom.deltaPrice || custom.nbRounds || custom.multipliers?.length);
       const preview = await previewSequence(symbol, budget, hasCustom ? custom : undefined);
       sendJson(res, 200, { ok: true, preview });
+      return;
+    }
+
+    if (route === 'POST /api/check') {
+      // "Check now": run this sequence's reconciliation immediately instead
+      // of waiting for the scheduled pass.
+      const body = await readJsonBody(req);
+      const sequenceId = String(body.sequenceId ?? '');
+      if (!sequenceId) {
+        sendJson(res, 400, { ok: false, error: 'sequenceId is required' });
+        return;
+      }
+      const summary = await cycleSequence(sequenceId, log);
+      sendJson(res, 200, { ok: true, ...summary });
+      return;
+    }
+
+    if (route === 'POST /api/resync-sell') {
+      const body = await readJsonBody(req);
+      const sequenceId = String(body.sequenceId ?? '');
+      if (!sequenceId) {
+        sendJson(res, 400, { ok: false, error: 'sequenceId is required' });
+        return;
+      }
+      const summary = await resyncSell(sequenceId, log);
+      sendJson(res, 200, { ok: true, ...summary });
       return;
     }
 
