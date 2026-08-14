@@ -18,6 +18,12 @@ export interface RunnerFile {
   /** Fill log for the paper venue so a restart replays the same world. */
   paperFills?: unknown[];
   /**
+   * Fill history for ANY venue, refreshed each cycle. Live venues answer
+   * from their own records while a sequence is open, but once it closes the
+   * journal needs its own copy: this is it.
+   */
+  fills?: unknown[];
+  /**
    * Client ids of paper orders still resting when the last cycle ended. The
    * simulated book lives in memory, so without this a one-shot `cycle` in a
    * new process would not see the active sell and would place another.

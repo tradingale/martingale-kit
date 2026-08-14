@@ -199,6 +199,7 @@ ${banner}
   <nav class="nav">
     <button class="nav-tab active" id="navScoreboard" type="button">Scoreboard</button>
     <button class="nav-tab" id="navDashboard" type="button">Dashboard</button>
+    <button class="nav-tab" id="navJournal" type="button">Journal</button>
     <button class="nav-tab" id="navKeys" type="button">Keys &amp; settings</button>
   </nav>
 
@@ -270,9 +271,43 @@ ${banner}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
       <span class="chip" id="dashCount">0 sequences</span>
       <button class="tab" id="clearPaper" type="button">Clear finished simulated</button>
-      <button class="tab" id="clearAll" type="button">Clear all finished</button>
+      <span style="font-size:10px;color:var(--faint)">Live sequences are permanent: see the Journal.</span>
     </div>
     <div id="sequences"></div>
+  </section>
+
+  <section id="pageJournal" style="display:none">
+    <div class="card">
+      <div class="card-head">
+        <h2>Metrics</h2>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <button class="tab active" id="jScopeAll" type="button">All</button>
+          <button class="tab" id="jScopeLive" type="button">Live</button>
+          <button class="tab" id="jScopePaper" type="button">Simulated</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="stats" id="jMetrics"></div>
+        <p style="margin-top:10px;font-size:10px;color:var(--faint)" id="jScopeNote"></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Sequence history</h2><span class="chip" id="jCount">0</span></div>
+      <div class="card-body">
+        <div class="cat-wrap" style="max-height:none">
+          <table class="cat">
+            <thead><tr><th>Sequence</th><th>Mode</th><th>Phase</th><th>Rounds</th><th>Capital used</th><th>Realized</th><th>On used</th><th>Duration</th></tr></thead>
+            <tbody id="jBody"></tbody>
+          </table>
+        </div>
+        <div class="cat-empty" id="jEmpty">loading journal...</div>
+        <p style="margin-top:10px;font-size:10px;color:var(--faint)">
+          Realized figures come from this runner's own fill history, on the portion actually sold, before fees and slippage.
+          Simulated results do not represent actual trading. Live sequences are kept permanently and cannot be deleted.
+        </p>
+      </div>
+    </div>
   </section>
 
   <section id="pageKeys" style="display:none">
@@ -803,10 +838,9 @@ ${banner}
       .catch(function () { window.alert('delete failed: server unreachable'); });
   }
 
-  function clearFinished(onlyPaper) {
-    var label = onlyPaper ? 'finished SIMULATED sequences' : 'ALL finished sequences';
-    if (!window.confirm('Remove ' + label + ' from the dashboard? Running sequences are kept.')) return;
-    fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true, onlyPaper: onlyPaper }) })
+  function clearFinished() {
+    if (!window.confirm('Remove finished SIMULATED sequences from the dashboard? Running and live sequences are kept.')) return;
+    fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: true }) })
       .then(function (res) { return res.json(); })
       .then(function (body) { if (body.ok) window.alert('Removed ' + body.removed + ' sequence(s).'); refresh(); })
       .catch(function () { window.alert('cleanup failed: server unreachable'); });
@@ -870,18 +904,93 @@ ${banner}
     renderCatalog();
   });
   function showPage(name) {
-    var pages = { scoreboard: 'pageScoreboard', dashboard: 'pageDashboard', keys: 'pageKeys' };
-    var navs = { scoreboard: 'navScoreboard', dashboard: 'navDashboard', keys: 'navKeys' };
+    var pages = { scoreboard: 'pageScoreboard', dashboard: 'pageDashboard', journal: 'pageJournal', keys: 'pageKeys' };
+    var navs = { scoreboard: 'navScoreboard', dashboard: 'navDashboard', journal: 'navJournal', keys: 'navKeys' };
     Object.keys(pages).forEach(function (k) {
       document.getElementById(pages[k]).style.display = k === name ? '' : 'none';
       document.getElementById(navs[k]).className = 'nav-tab' + (k === name ? ' active' : '');
     });
+    if (name === 'journal') fetchJournal();
   }
-  document.getElementById('clearPaper').addEventListener('click', function () { clearFinished(true); });
-  document.getElementById('clearAll').addEventListener('click', function () { clearFinished(false); });
+
+  var journalScope = 'all';
+
+  function fmtDur(ms) {
+    if (!ms) return '—';
+    var h = ms / 3600000;
+    if (h < 24) return h.toFixed(1) + ' h';
+    return (h / 24).toFixed(1) + ' d';
+  }
+
+  function setScope(scope) {
+    journalScope = scope;
+    document.getElementById('jScopeAll').className = 'tab' + (scope === 'all' ? ' active' : '');
+    document.getElementById('jScopeLive').className = 'tab' + (scope === 'live' ? ' active' : '');
+    document.getElementById('jScopePaper').className = 'tab' + (scope === 'paper' ? ' active' : '');
+    fetchJournal();
+  }
+
+  function fetchJournal() {
+    fetch('/api/journal?scope=' + journalScope, { headers: { 'Accept': 'application/json' } })
+      .then(function (res) { return res.json(); })
+      .then(function (body) { if (body && body.ok) renderJournal(body); })
+      .catch(function () { document.getElementById('jEmpty').textContent = 'journal unavailable'; });
+  }
+
+  function renderJournal(body) {
+    var m = body.metrics;
+    var host = document.getElementById('jMetrics');
+    host.textContent = '';
+    host.appendChild(stat('Realized P/L', (m.totalRealized >= 0 ? '+$' : '-$') + fmtPrice(Math.abs(m.totalRealized))));
+    host.appendChild(stat('Win rate', m.winRateDenominator ? m.winRatePct.toFixed(0) + '%  (' + m.winRateNumerator + '/' + m.winRateDenominator + ')' : '—'));
+    host.appendChild(stat('Closed', m.closedCount + '  (' + m.completedCount + ' completed, ' + m.canceledCount + ' canceled)'));
+    host.appendChild(stat('Avg on capital used', (m.avgRealizedPctOnUsed >= 0 ? '+' : '') + m.avgRealizedPctOnUsed.toFixed(2) + '%'));
+    host.appendChild(stat('Avg on budget', (m.avgRealizedPctOnBudget >= 0 ? '+' : '') + m.avgRealizedPctOnBudget.toFixed(2) + '%'));
+    host.appendChild(stat('Capital efficiency', m.capitalEfficiencyPct.toFixed(1) + '%'));
+    host.appendChild(stat('Avg capital used', '$' + fmtPrice(m.avgCapitalUsed)));
+    host.appendChild(stat('Avg rounds', m.avgRounds.toFixed(2)));
+    host.appendChild(stat('Max-round sequences', String(m.maxRoundCount)));
+    host.appendChild(stat('Avg duration', fmtDur(m.avgDurationMs)));
+    host.appendChild(stat('Active', m.activeCount + '  ($' + fmtPrice(m.activeCapital) + ' deployed)'));
+
+    document.getElementById('jScopeNote').textContent = body.scope === 'all'
+      ? 'All sequences, simulated and live together. Use the Live / Simulated filters to read them apart.'
+      : body.scope === 'live'
+        ? 'Live sequences only: real orders on your own account.'
+        : 'Simulated sequences only. Simulated results do not represent actual trading.';
+
+    var rows = body.entries || [];
+    document.getElementById('jCount').textContent = rows.length + ' sequence(s)';
+    var tb = document.getElementById('jBody');
+    tb.textContent = '';
+    document.getElementById('jEmpty').textContent = rows.length ? '' : 'No sequences yet.';
+    rows.forEach(function (e) {
+      var tr = document.createElement('tr');
+      var td0 = el('td', 'mono');
+      td0.appendChild(el('span', 'cat-sym', e.symbol));
+      td0.appendChild(el('div', null, e.sequenceId));
+      td0.lastChild.style.fontSize = '9px';
+      td0.lastChild.style.color = 'var(--faint)';
+      tr.appendChild(td0);
+      tr.appendChild(el('td', e.live ? 'sg-misaligned' : 'sg-moderate', e.live ? 'LIVE ' + e.venue : 'simulated'));
+      tr.appendChild(el('td', null, e.phase));
+      tr.appendChild(el('td', 'mono', e.roundsReached + '/' + e.totalRounds));
+      tr.appendChild(el('td', 'mono', '$' + fmtPrice(e.capitalUsed)));
+      tr.appendChild(el('td', 'mono ' + (e.realized >= 0 ? 'sg-strong' : 'sg-misaligned'),
+        (e.realized >= 0 ? '+$' : '-$') + fmtPrice(Math.abs(e.realized))));
+      tr.appendChild(el('td', 'mono', (e.realizedPctOnUsed >= 0 ? '+' : '') + e.realizedPctOnUsed.toFixed(2) + '%'));
+      tr.appendChild(el('td', 'mono', fmtDur(e.durationMs)));
+      tb.appendChild(tr);
+    });
+  }
+  document.getElementById('clearPaper').addEventListener('click', function () { clearFinished(); });
   document.getElementById('navScoreboard').addEventListener('click', function () { showPage('scoreboard'); });
   document.getElementById('navDashboard').addEventListener('click', function () { showPage('dashboard'); });
+  document.getElementById('navJournal').addEventListener('click', function () { showPage('journal'); });
   document.getElementById('navKeys').addEventListener('click', function () { showPage('keys'); });
+  document.getElementById('jScopeAll').addEventListener('click', function () { setScope('all'); });
+  document.getElementById('jScopeLive').addEventListener('click', function () { setScope('live'); });
+  document.getElementById('jScopePaper').addEventListener('click', function () { setScope('paper'); });
 
   document.getElementById('catRefresh').addEventListener('click', function () {
     var btn = this;

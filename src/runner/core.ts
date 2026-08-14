@@ -457,6 +457,7 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
     else if (action.type === 'cancelOrder') await venue.cancelOrder(action.clientId);
   }
   file.state = state;
+  file.fills = snapshot.fills; // journal history, every venue
   file.lastPrice = price;
   file.lastCycleAt = new Date().toISOString();
   await savePaperState(file, venue);
@@ -584,6 +585,7 @@ export async function stopSequence(
   }
 
   file.state.phase = 'canceled';
+  file.fills = await venue.getFills(); // final history for the journal
   if (price !== null) file.lastPrice = price;
   file.state.haltReason = options.reverse
     ? reversed
@@ -606,9 +608,12 @@ export async function stopSequence(
 }
 
 /**
- * Delete a finished sequence's file (dashboard housekeeping). A RUNNING
- * sequence is never deleted: stop it first, otherwise live orders would
- * keep resting at the venue with nothing reconciling them.
+ * Delete a finished SIMULATED sequence's file (dashboard housekeeping).
+ * Two refusals, both deliberate:
+ *  - a RUNNING sequence is never deleted (stop it first, otherwise live
+ *    orders keep resting at the venue with nothing reconciling them);
+ *  - a LIVE sequence is never deleted, ever. Real money happened: it stays
+ *    in the journal as a permanent record.
  */
 export function deleteSequence(sequenceId: string): { deleted: boolean; reason?: string } {
   const file = loadRun(sequenceId);
@@ -616,19 +621,172 @@ export function deleteSequence(sequenceId: string): { deleted: boolean; reason?:
   if (file.state.phase === 'running') {
     return { deleted: false, reason: 'sequence is running: stop it first' };
   }
+  if (file.venue !== 'paper') {
+    return { deleted: false, reason: 'live sequences are kept permanently in the journal' };
+  }
   return { deleted: deleteRun(sequenceId) };
 }
 
-/** Delete every non-running sequence. Returns how many files were removed. */
-export function deleteFinished(onlyPaper = false): number {
+/** Delete finished SIMULATED sequences only. Live history is never removed. */
+export function deleteFinished(): number {
   let removed = 0;
   for (const id of listRuns()) {
     const file = loadRun(id);
-    if (!file || file.state.phase === 'running') continue;
-    if (onlyPaper && file.venue !== 'paper') continue;
+    if (!file || file.state.phase === 'running' || file.venue !== 'paper') continue;
     if (deleteRun(id)) removed++;
   }
   return removed;
+}
+
+// ---------------------------------------------------------------------------
+// Journal + metrics, computed from the persisted fill history (the same
+// figures the Tradingale dashboard reports, restricted to what a local
+// runner can actually know).
+// ---------------------------------------------------------------------------
+
+export interface JournalEntry {
+  sequenceId: string;
+  symbol: string;
+  assetType: 'crypto' | 'stock';
+  venue: 'paper' | 'kraken' | 'alpaca';
+  live: boolean;
+  phase: string;
+  budget: number;
+  /** Quote spent on filled buys. */
+  capitalUsed: number;
+  /** Quote received from filled sells. */
+  proceeds: number;
+  /** Realized P/L on the portion actually sold (proportional cost basis). */
+  realized: number;
+  /** Realized P/L as a percentage of the capital actually deployed. */
+  realizedPctOnUsed: number;
+  /** Realized P/L as a percentage of the budget allocated. */
+  realizedPctOnBudget: number;
+  /** Base units still held (a stop without reverse keeps the position). */
+  openQuantity: number;
+  roundsReached: number;
+  totalRounds: number;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+}
+
+interface FillLike {
+  side: 'buy' | 'sell';
+  price: number;
+  quantity: number;
+}
+
+function entryFor(file: RunnerFile, sequenceId: string): JournalEntry {
+  const fills = ((file.fills ?? file.paperFills ?? []) as FillLike[]).filter(
+    (f) => f && Number.isFinite(f.price) && Number.isFinite(f.quantity),
+  );
+  let boughtQty = 0;
+  let capitalUsed = 0;
+  let soldQty = 0;
+  let proceeds = 0;
+  for (const fill of fills) {
+    if (fill.side === 'buy') {
+      boughtQty += fill.quantity;
+      capitalUsed += fill.quantity * fill.price;
+    } else {
+      soldQty += fill.quantity;
+      proceeds += fill.quantity * fill.price;
+    }
+  }
+  // Cost basis of the SOLD portion only, so a partial exit is not counted
+  // as a loss on inventory the user still holds.
+  const soldCost = boughtQty > 0 ? capitalUsed * Math.min(1, soldQty / boughtQty) : 0;
+  const realized = proceeds - soldCost;
+  const endedAt = file.state.phase === 'running' ? null : (file.lastCycleAt ?? null);
+  return {
+    sequenceId,
+    symbol: file.symbol,
+    assetType: file.assetType ?? 'crypto',
+    venue: file.venue,
+    live: file.venue !== 'paper',
+    phase: file.state.phase,
+    budget: file.budget,
+    capitalUsed,
+    proceeds,
+    realized,
+    realizedPctOnUsed: soldCost > 0 ? (realized / soldCost) * 100 : 0,
+    realizedPctOnBudget: file.budget > 0 ? (realized / file.budget) * 100 : 0,
+    openQuantity: Math.max(0, boughtQty - soldQty),
+    roundsReached: file.state.deepestFilledLevel,
+    totalRounds: file.plan.ladder.levels.length,
+    startedAt: file.createdAt,
+    endedAt,
+    durationMs: endedAt ? Date.parse(endedAt) - Date.parse(file.createdAt) : null,
+  };
+}
+
+/** Every sequence the runner knows about, newest first. */
+export function journal(): JournalEntry[] {
+  const entries: JournalEntry[] = [];
+  for (const id of listRuns()) {
+    const file = loadRun(id);
+    if (file) entries.push(entryFor(file, id));
+  }
+  return entries.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+}
+
+export interface JournalMetrics {
+  closedCount: number;
+  completedCount: number;
+  canceledCount: number;
+  activeCount: number;
+  totalRealized: number;
+  /** Profitable closed sequences over closed sequences (the site's true win rate). */
+  winRatePct: number;
+  winRateNumerator: number;
+  winRateDenominator: number;
+  avgRealizedPctOnUsed: number;
+  avgRealizedPctOnBudget: number;
+  avgCapitalUsed: number;
+  /** Capital actually deployed over capital allocated, in percent. */
+  capitalEfficiencyPct: number;
+  avgRounds: number;
+  /** Sequences that reached their deepest level (the site's apex ratio). */
+  maxRoundCount: number;
+  avgDurationMs: number | null;
+  activeCapital: number;
+}
+
+/**
+ * Aggregate the journal. `scope` mirrors the dashboard filter: simulated
+ * runs and real ones are never averaged together, because mixing them
+ * would report a number that describes neither.
+ */
+export function journalMetrics(scope: 'live' | 'paper' | 'all' = 'all'): JournalMetrics {
+  const all = journal().filter((e) => (scope === 'all' ? true : scope === 'live' ? e.live : !e.live));
+  const closed = all.filter((e) => e.phase !== 'running');
+  const active = all.filter((e) => e.phase === 'running');
+  const wins = closed.filter((e) => e.realized > 0);
+  const durations = closed.map((e) => e.durationMs).filter((d): d is number => typeof d === 'number' && d > 0);
+  const avg = (nums: number[]): number => (nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : 0);
+
+  return {
+    closedCount: closed.length,
+    completedCount: closed.filter((e) => e.phase === 'complete').length,
+    canceledCount: closed.filter((e) => e.phase === 'canceled').length,
+    activeCount: active.length,
+    totalRealized: closed.reduce((sum, e) => sum + e.realized, 0),
+    winRatePct: closed.length ? (wins.length / closed.length) * 100 : 0,
+    winRateNumerator: wins.length,
+    winRateDenominator: closed.length,
+    avgRealizedPctOnUsed: avg(closed.map((e) => e.realizedPctOnUsed)),
+    avgRealizedPctOnBudget: avg(closed.map((e) => e.realizedPctOnBudget)),
+    avgCapitalUsed: avg(closed.map((e) => e.capitalUsed)),
+    capitalEfficiencyPct: (() => {
+      const budget = closed.reduce((sum, e) => sum + e.budget, 0);
+      return budget > 0 ? (closed.reduce((sum, e) => sum + e.capitalUsed, 0) / budget) * 100 : 0;
+    })(),
+    avgRounds: avg(closed.map((e) => e.roundsReached)),
+    maxRoundCount: closed.filter((e) => e.roundsReached >= e.totalRounds).length,
+    avgDurationMs: durations.length ? avg(durations) : null,
+    activeCapital: active.reduce((sum, e) => sum + e.capitalUsed, 0),
+  };
 }
 
 export interface SequenceStatus {

@@ -27,6 +27,8 @@ import {
   cycleAll,
   deleteFinished,
   deleteSequence,
+  journal,
+  journalMetrics,
   krakenKeysPresent,
   previewSequence,
   runnerMode,
@@ -356,6 +358,18 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (route === 'GET /api/journal') {
+      const scopeParam = url.searchParams.get('scope');
+      const scope = scopeParam === 'live' || scopeParam === 'paper' ? scopeParam : 'all';
+      sendJson(res, 200, {
+        ok: true,
+        scope,
+        metrics: journalMetrics(scope),
+        entries: journal().filter((e) => (scope === 'all' ? true : scope === 'live' ? e.live : !e.live)),
+      });
+      return;
+    }
+
     if (route === 'GET /api/preview') {
       const symbol = String(url.searchParams.get('symbol') ?? '');
       const budget = Number(url.searchParams.get('budget') ?? NaN);
@@ -379,7 +393,8 @@ const server = http.createServer(async (req, res) => {
       // stays readable. Running sequences are protected (stop them first).
       const body = await readJsonBody(req);
       if (body.finished === true) {
-        const removed = deleteFinished(body.onlyPaper === true);
+        // Simulated runs only: live history is permanent.
+        const removed = deleteFinished();
         sendJson(res, 200, { ok: true, removed });
         return;
       }
