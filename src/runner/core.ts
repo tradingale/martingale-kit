@@ -456,6 +456,22 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
     if (action.type === 'placeOrder') await venue.placeOrder(action.order);
     else if (action.type === 'cancelOrder') await venue.cancelOrder(action.clientId);
   }
+  // What this pass did, in plain words: the automation is only reassuring
+  // if the user can see it working.
+  file.lastAction = actions.length
+    ? actions
+        .map((a) =>
+          a.type === 'placeOrder'
+            ? `placed ${a.order.side} level ${a.order.level}${a.order.price ? ` @ ${a.order.price}` : ' at market'}`
+            : a.type === 'cancelOrder'
+              ? 'canceled the stale sell'
+              : a.type === 'complete'
+                ? 'sequence complete: the sell filled'
+                : `alert: ${a.message}`,
+        )
+        .join('; ')
+    : 'nothing to do';
+
   file.state = state;
   file.fills = snapshot.fills; // journal history, every venue
   file.lastPrice = price;
@@ -912,6 +928,8 @@ export interface SequenceStatus {
   deltaPrice: number;
   lastPrice: number | null;
   lastCycleAt: string | null;
+  /** What the last check did, in plain words. */
+  lastAction: string | null;
   levels: LadderLevel[];
 }
 
@@ -934,6 +952,7 @@ export function statusAll(): SequenceStatus[] {
       deltaPrice: file.plan.ladder.params.deltaPrice,
       lastPrice: file.lastPrice ?? null,
       lastCycleAt: file.lastCycleAt ?? null,
+      lastAction: file.lastAction ?? null,
       levels: file.plan.ladder.levels,
     });
   }

@@ -566,6 +566,7 @@ ${banner}
     stats.appendChild(stat('Live price', seq.lastPrice === null ? 'waiting' : '$' + fmtPrice(seq.lastPrice)));
     stats.appendChild(stat('Venue', seq.venue === 'paper' ? 'paper (simulated)' : seq.venue + ' (live)'));
     stats.appendChild(stat('Last check', seq.lastCycleAt ? new Date(seq.lastCycleAt).toLocaleTimeString() : 'not yet'));
+    stats.appendChild(stat('Last action', seq.lastAction || 'waiting for the first check'));
     body.appendChild(stats);
 
     var ladder = el('div', 'ladder');

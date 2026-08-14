@@ -33,6 +33,8 @@ export interface RunnerFile {
   lastPrice?: number;
   /** When the last reconciliation cycle ran (ISO). */
   lastCycleAt?: string;
+  /** What that cycle actually did, in plain words (dashboard visibility). */
+  lastAction?: string;
 }
 
 export function runnerDir(): string {
