@@ -47,21 +47,13 @@ export interface StartOptions {
   mode: RunnerMode;
   /** Optional custom structure, exactly as previewed. */
   custom?: CustomParams;
-  /**
-   * The site's manual sequences: YOU execute on your own exchange, the
-   * runner only tracks. The plan is frozen exactly like any other sequence
-   * and the level-1 buy is recorded as filled at the live entry price (the
-   * site does the same); after that, you record each fill yourself. No
-   * order is ever placed anywhere. Overrides mode.
-   */
-  manual?: boolean;
 }
 
 export interface StartSummary {
   sequenceId: string;
   symbol: string;
   mode: RunnerMode;
-  venue: 'paper' | 'kraken' | 'alpaca' | 'manual';
+  venue: 'paper' | 'kraken' | 'alpaca';
   entryPrice: number;
   levels: number;
   budget: number;
@@ -258,72 +250,6 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
   const { instrument } = applyCustom(baseInstrument, options.custom);
 
   const sequenceId = `${symbol}-${Date.now()}`;
-
-  // Manual tracking: same instrument, same math, same guardrails — but the
-  // runner never touches a venue. The level-1 buy is recorded as filled at
-  // the live entry price, exactly like the site's manual sequences, and
-  // every later fill is declared by the user from the dashboard.
-  if (options.manual) {
-    let manualGrids = NULL_GRIDS;
-    let manualHasGrids = false;
-    try {
-      manualGrids = assetType === 'crypto' ? await fetchKrakenGrids(symbol) : NULL_GRIDS;
-      manualHasGrids = assetType === 'crypto';
-    } catch {
-      manualGrids = NULL_GRIDS;
-    }
-    const manualEntry = await publicPrice(symbol, assetType);
-    const manualFloor = budgetMin(instrument, manualEntry, manualGrids);
-    const manualLadder = computeLadder(instrument, budget, manualEntry, manualHasGrids ? manualGrids : undefined);
-    const manualProblems = checkLadderAgainstGrids(manualLadder, manualGrids);
-    if (manualProblems.length > 0 || budget < manualFloor) {
-      throw new Error(
-        `Underfunded ladder (budget_min ~$${Math.ceil(manualFloor)}): ${manualProblems.join('; ') || 'raise the budget'}`,
-      );
-    }
-    const manualPlan = buildPlan(sequenceId, manualLadder);
-    const state = initialState();
-    state.phase = 'running';
-    state.deepestFilledLevel = 1; // the site marks round 1 FILLED at creation
-    const entryFill: Fill = {
-      clientId: `${sequenceId}-buy-1`,
-      side: 'buy',
-      price: manualEntry,
-      quantity: manualLadder.levels[0].quantity,
-      timestamp: Date.now(),
-    };
-    const file: RunnerFile = {
-      version: 1,
-      createdAt: new Date().toISOString(),
-      symbol,
-      assetType,
-      venue: 'manual',
-      budget,
-      plan: manualPlan,
-      state,
-      fills: [entryFill],
-      lastPrice: manualEntry,
-      lastAction: 'manual tracking started: record your own fills from the dashboard',
-    };
-    saveRun(file, sequenceId);
-    log(
-      `started MANUAL tracking ${sequenceId} at $${manualEntry} (${manualPlan.ladder.levels.length} levels, $${budget}) — you execute, the runner tracks`,
-    );
-    void notify(
-      `${tag('manual')} ${sequenceId}\nManual tracking started on ${symbol} at $${manualEntry}: ${manualPlan.ladder.levels.length} levels, $${budget} budget. Record your fills from the dashboard.`,
-    );
-    return {
-      sequenceId,
-      symbol,
-      mode: 'paper',
-      venue: 'manual',
-      entryPrice: manualEntry,
-      levels: manualPlan.ladder.levels.length,
-      budget,
-      martingaleScore: instrument.martingaleScore,
-      startingale: instrument.startingale,
-    };
-  }
 
   // Grids: live resolves through the adapter (a missing pair refuses the
   // start); paper tries the same public AssetPairs data and degrades to
@@ -522,28 +448,6 @@ export async function cycleSequence(sequenceId: string, log: Logger = () => {}):
       actionCount: 0,
     };
   }
-  if (file.paused) {
-    throw new Error(`${sequenceId} is paused: resume it before running a check`);
-  }
-  // Manual sequences have nothing to reconcile — the user IS the venue.
-  // Refresh the display price (best effort) and report, nothing else.
-  if (file.venue === 'manual') {
-    try {
-      file.lastPrice = await publicPrice(file.symbol, file.assetType ?? 'crypto');
-    } catch {
-      /* price is cosmetic here */
-    }
-    file.lastCycleAt = new Date().toISOString();
-    file.lastAction = 'manual tracking: waiting for your fills';
-    saveRun(file, sequenceId);
-    return {
-      sequenceId,
-      phase: file.state.phase,
-      deepestFilledLevel: file.state.deepestFilledLevel,
-      price: file.lastPrice ?? null,
-      actionCount: 0,
-    };
-  }
 
   const { venue, price } = await buildVenue(file, sequenceId);
 
@@ -614,8 +518,6 @@ export async function resyncSell(sequenceId: string, log: Logger = () => {}): Pr
   const file = loadRun(sequenceId);
   if (!file) throw new Error(`unknown sequence ${sequenceId}`);
   if (file.state.phase !== 'running') throw new Error(`sequence is ${file.state.phase}, not running`);
-  if (file.paused) throw new Error(`${sequenceId} is paused: resume it before resyncing the sell`);
-  if (file.venue === 'manual') throw new Error('manual sequences have no resting orders to resync: you execute them yourself');
 
   const { venue } = await buildVenue(file, sequenceId);
   const open = await venue.getOpenOrders();
@@ -644,98 +546,12 @@ export async function cycleAll(log: Logger = () => {}): Promise<CycleSummary[]> 
   const summaries: CycleSummary[] = [];
   for (const id of listRuns()) {
     try {
-      // The site's toggle-bot: a paused sequence is skipped by the scheduled
-      // pass, quietly. Its resting orders stay exactly where they are.
-      const file = loadRun(id);
-      if (file?.paused) {
-        log(`${id}: paused, skipped`);
-        continue;
-      }
       summaries.push(await cycleSequence(id, log));
     } catch (error) {
       log(`${id}: cycle error: ${error instanceof Error ? error.message : error}`);
     }
   }
   return summaries;
-}
-
-/**
- * The site's toggle-bot, per sequence: paused means the scheduled pass skips
- * it and Check now / Resync refuse, until it is resumed. Orders already
- * resting on the venue are NOT touched — pausing stops the runner's checks,
- * it does not cancel anything (use Stop for that).
- */
-export function pauseSequence(sequenceId: string, paused: boolean): { sequenceId: string; paused: boolean } {
-  const file = loadRun(sequenceId);
-  if (!file) throw new Error(`unknown sequence ${sequenceId}`);
-  if (file.state.phase !== 'running') throw new Error(`sequence is ${file.state.phase}, not running`);
-  if (file.venue === 'manual') throw new Error('manual sequences have no bot to pause: you execute them yourself');
-  file.paused = paused;
-  file.lastAction = paused
-    ? 'paused: automatic checks skip this sequence until you resume it (resting orders untouched)'
-    : 'resumed: automatic checks are back on';
-  saveRun(file, sequenceId);
-  void notify(
-    `${tag(file.venue)} ${sequenceId}\n${paused ? 'Paused' : 'Resumed'} on ${file.symbol}: automatic checks are ${paused ? 'OFF (resting orders untouched)' : 'back on'}.`,
-  );
-  return { sequenceId, paused };
-}
-
-/**
- * The site's manual update-round / complete-sell: record a fill YOU executed
- * on your own exchange. 'buy' marks the next level's buy as filled at its
- * planned price; 'sell' marks the current level's sell as filled and
- * completes the sequence. Manual sequences only.
- */
-export function markManualFill(
-  sequenceId: string,
-  kind: 'buy' | 'sell',
-): { sequenceId: string; phase: string; deepestFilledLevel: number } {
-  const file = loadRun(sequenceId);
-  if (!file) throw new Error(`unknown sequence ${sequenceId}`);
-  if (file.venue !== 'manual') throw new Error('fills can only be recorded on manual sequences');
-  if (file.state.phase !== 'running') throw new Error(`sequence is ${file.state.phase}, not running`);
-
-  const levels = file.plan.ladder.levels;
-  const fills = (file.fills ?? []) as Fill[];
-
-  if (kind === 'buy') {
-    const next = file.state.deepestFilledLevel + 1;
-    const level = levels.find((l) => l.level === next);
-    if (!level) throw new Error(`level ${next} does not exist: the ladder has ${levels.length} levels`);
-    fills.push({
-      clientId: `${sequenceId}-buy-${next}`,
-      side: 'buy',
-      price: level.buyPrice,
-      quantity: level.quantity,
-      timestamp: Date.now(),
-    });
-    file.state.deepestFilledLevel = next;
-    file.lastAction = `you recorded the level ${next} buy as filled @ ${level.buyPrice}`;
-    void notify(
-      `${tag('manual')} ${sequenceId}\nLevel ${next}/${levels.length} buy recorded on ${file.symbol} @ $${level.buyPrice}.`,
-    );
-  } else {
-    const current = levels.find((l) => l.level === file.state.deepestFilledLevel);
-    if (!current) throw new Error('no filled level to sell from');
-    fills.push({
-      clientId: `${sequenceId}-sell-${current.level}`,
-      side: 'sell',
-      price: current.exitPrice,
-      quantity: current.cumulativeQuantity,
-      timestamp: Date.now(),
-    });
-    file.state.phase = 'complete';
-    file.lastAction = `you recorded the level ${current.level} sell as filled @ ${current.exitPrice}: sequence complete`;
-    void notify(
-      `${tag('manual')} ${sequenceId}\nSequence complete on ${file.symbol}: sell recorded @ $${current.exitPrice}.`,
-    );
-  }
-
-  file.fills = fills;
-  file.lastCycleAt = new Date().toISOString();
-  saveRun(file, sequenceId);
-  return { sequenceId, phase: file.state.phase, deepestFilledLevel: file.state.deepestFilledLevel };
 }
 
 export interface StopOptions {
@@ -750,7 +566,7 @@ export interface StopOptions {
 
 export interface StopSummary {
   sequenceId: string;
-  venue: 'paper' | 'kraken' | 'alpaca' | 'manual';
+  venue: 'paper' | 'kraken' | 'alpaca';
   phase: string;
   canceledOrders: number;
   reversed: boolean;
@@ -782,26 +598,6 @@ export async function stopSequence(
       reversed: false,
       reversedQuantity: 0,
       warning: `sequence is ${file.state.phase}, not running`,
-    };
-  }
-
-  // Manual tracking: nothing rests anywhere, stopping only closes the
-  // record. Whatever you hold on your exchange stays yours to manage.
-  if (file.venue === 'manual') {
-    file.state.phase = 'canceled';
-    file.state.haltReason = 'tracking stopped by operator; your own exchange orders are untouched';
-    file.lastAction = 'manual tracking stopped';
-    file.lastCycleAt = new Date().toISOString();
-    saveRun(file, sequenceId);
-    void notify(`${tag('manual')} ${sequenceId}\nManual tracking stopped on ${file.symbol}. Your own exchange orders are untouched.`);
-    return {
-      sequenceId,
-      venue: file.venue,
-      phase: 'canceled',
-      canceledOrders: 0,
-      reversed: false,
-      reversedQuantity: 0,
-      warning: options.reverse ? 'nothing to reverse: the runner never held or placed anything for a manual sequence' : null,
     };
   }
 
@@ -890,10 +686,8 @@ export async function stopSequence(
  * Two refusals, both deliberate:
  *  - a RUNNING sequence is never deleted (stop it first, otherwise live
  *    orders keep resting at the venue with nothing reconciling them);
- *  - a LIVE sequence is never deleted, ever. Real money placed BY THE RUNNER
- *    stays in the journal as a permanent record. Manual sequences are
- *    deletable like on the site: the runner only ever held your notes about
- *    them, not the orders.
+ *  - a LIVE sequence is never deleted, ever. Real money happened: it stays
+ *    in the journal as a permanent record.
  */
 export function deleteSequence(sequenceId: string): { deleted: boolean; reason?: string } {
   const file = loadRun(sequenceId);
@@ -901,7 +695,7 @@ export function deleteSequence(sequenceId: string): { deleted: boolean; reason?:
   if (file.state.phase === 'running') {
     return { deleted: false, reason: 'sequence is running: stop it first' };
   }
-  if (file.venue !== 'paper' && file.venue !== 'manual') {
+  if (file.venue !== 'paper') {
     return { deleted: false, reason: 'live sequences are kept permanently in the journal' };
   }
   return { deleted: deleteRun(sequenceId) };
@@ -928,8 +722,7 @@ export interface JournalEntry {
   sequenceId: string;
   symbol: string;
   assetType: 'crypto' | 'stock';
-  venue: 'paper' | 'kraken' | 'alpaca' | 'manual';
-  /** True for anything that is not simulated: runner-driven live AND manual. */
+  venue: 'paper' | 'kraken' | 'alpaca';
   live: boolean;
   phase: string;
   budget: number;
@@ -1148,10 +941,8 @@ export function journalMetrics(scope: 'live' | 'paper' | 'all' = 'all'): Journal
 export interface SequenceStatus {
   sequenceId: string;
   symbol: string;
-  venue: 'paper' | 'kraken' | 'alpaca' | 'manual';
+  venue: 'paper' | 'kraken' | 'alpaca';
   phase: string;
-  /** The site's toggle-bot: automatic checks skip this sequence while true. */
-  paused: boolean;
   haltReason: string | null;
   budget: number;
   createdAt: string;
@@ -1184,7 +975,6 @@ export function statusAll(): SequenceStatus[] {
       entryPrice: file.plan.ladder.entryPrice,
       deltaPrice: file.plan.ladder.params.deltaPrice,
       lastPrice: file.lastPrice ?? null,
-      paused: Boolean(file.paused),
       lastCycleAt: file.lastCycleAt ?? null,
       lastAction: file.lastAction ?? null,
       levels: file.plan.ladder.levels,

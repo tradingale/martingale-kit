@@ -11,7 +11,7 @@ export interface RunnerFile {
   createdAt: string;
   symbol: string;
   assetType?: 'crypto' | 'stock';
-  venue: 'paper' | 'kraken' | 'alpaca' | 'manual';
+  venue: 'paper' | 'kraken' | 'alpaca';
   budget: number;
   plan: SequencePlan;
   state: SequenceState;
@@ -35,12 +35,6 @@ export interface RunnerFile {
   lastCycleAt?: string;
   /** What that cycle actually did, in plain words (dashboard visibility). */
   lastAction?: string;
-  /**
-   * The site's toggle-bot: true means automatic checks skip this sequence
-   * (and Check now refuses) until it is resumed. Orders already resting on
-   * the venue are left exactly where they are.
-   */
-  paused?: boolean;
 }
 
 export function runnerDir(): string {

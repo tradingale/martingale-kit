@@ -31,8 +31,6 @@ import {
   journal,
   journalMetrics,
   krakenKeysPresent,
-  markManualFill,
-  pauseSequence,
   resyncSell,
   previewSequence,
   runnerMode,
@@ -432,35 +430,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (route === 'POST /api/pause') {
-      // The site's toggle-bot: pause/resume the automatic checks per sequence.
-      const body = await readJsonBody(req);
-      const sequenceId = String(body.sequenceId ?? '');
-      if (!sequenceId) {
-        sendJson(res, 400, { ok: false, error: 'sequenceId is required' });
-        return;
-      }
-      const result = pauseSequence(sequenceId, body.paused !== false);
-      log(`${sequenceId}: ${result.paused ? 'paused' : 'resumed'}`);
-      sendJson(res, 200, { ok: true, ...result });
-      return;
-    }
-
-    if (route === 'POST /api/manual-fill') {
-      // Record a fill YOU executed on your own exchange (manual sequences).
-      const body = await readJsonBody(req);
-      const sequenceId = String(body.sequenceId ?? '');
-      const kind = body.kind === 'sell' ? 'sell' : body.kind === 'buy' ? 'buy' : null;
-      if (!sequenceId || !kind) {
-        sendJson(res, 400, { ok: false, error: 'sequenceId and kind (buy|sell) are required' });
-        return;
-      }
-      const result = markManualFill(sequenceId, kind);
-      log(`${sequenceId}: manual ${kind} recorded (level ${result.deepestFilledLevel}, ${result.phase})`);
-      sendJson(res, 200, { ok: true, ...result });
-      return;
-    }
-
     if (route === 'POST /api/resync-sell') {
       const body = await readJsonBody(req);
       const sequenceId = String(body.sequenceId ?? '');
@@ -580,7 +549,6 @@ const server = http.createServer(async (req, res) => {
             budget: Number(body.budget ?? NaN),
             mode: MODE, // the client can never escalate to live; only RUNNER_MODE decides
             custom: hasCustom ? custom : undefined,
-            manual: body.manual === true, // track-only: you execute, the runner records
           },
           log,
         );

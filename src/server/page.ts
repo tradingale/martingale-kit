@@ -78,10 +78,6 @@ export function renderPage(mode: RunnerMode): string {
   .card.livecard { border-color: rgba(239, 68, 68, 0.45); }
   .chip-paper { color: #fcd34d; border-color: rgba(251, 191, 36, 0.5); background: rgba(180, 83, 9, 0.18); }
   .chip-live { color: #fecaca; border-color: rgba(239, 68, 68, 0.55); background: rgba(127, 29, 29, 0.25); }
-  .card.manualcard > .card-head { background: linear-gradient(90deg, rgba(76, 29, 149, 0.45), rgba(139, 92, 246, 0.12)); border-bottom-color: rgba(139, 92, 246, 0.5); }
-  .card.manualcard { border-color: rgba(139, 92, 246, 0.45); }
-  .chip-manual { color: #ddd6fe; border-color: rgba(139, 92, 246, 0.55); background: rgba(76, 29, 149, 0.25); }
-  .chip-pausedbadge { color: #d1d5db; border-color: rgba(156, 163, 175, 0.5); background: rgba(75, 85, 99, 0.3); }
   .chip-halted { color: #fda4af; border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.08); }
   .chip-complete { color: #86efac; border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.08); }
   .card-body { padding: 14px; }
@@ -190,7 +186,6 @@ export function renderPage(mode: RunnerMode): string {
   .jrow-badge { font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; letter-spacing: 0.05em; }
   .jrow-badge.sim { color: #fcd34d; background: rgba(180,83,9,0.25); }
   .jrow-badge.live { color: #fecaca; background: rgba(127,29,29,0.35); }
-  .jrow-badge.man { color: #ddd6fe; background: rgba(76,29,149,0.35); }
   .jrow-spacer { flex: 1; }
   .jrow-body { display: none; padding: 0 10px 10px 32px; }
   .jrow.open .jrow-body { display: block; }
@@ -256,7 +251,6 @@ ${banner}
         <div class="field"><label for="budget">Budget (USD)</label><input id="budget" value="1000" inputmode="decimal" autocomplete="off"></div>
         <button class="tab" id="pvRefresh" type="button">Preview</button>
         <button class="primary" id="startBtn" type="submit">Start this sequence</button>
-        <button class="tab" id="manualBtn" type="button" title="You execute on your own exchange; the runner freezes the same plan and only tracks the fills you record.">Track manually</button>
       </form>
 
       <div style="margin-top:12px;border-top:1px solid rgba(60,231,252,0.12);padding-top:12px">
@@ -531,8 +525,7 @@ ${banner}
 
   function renderSequence(seq) {
     var isPaper = seq.venue === 'paper';
-    var isManual = seq.venue === 'manual';
-    var card = el('div', 'card ' + (isManual ? 'manualcard' : isPaper ? 'paper' : 'livecard'));
+    var card = el('div', 'card ' + (isPaper ? 'paper' : 'livecard'));
 
     var head = el('div', 'card-head');
     var title = el('h2');
@@ -550,41 +543,18 @@ ${banner}
     chips.style.flexWrap = 'wrap';
     chips.appendChild(el('span', 'chip mono', '$' + fmtPrice(seq.budget)));
     chips.appendChild(el('span', 'chip', seq.totalLevels + ' rounds'));
-    chips.appendChild(el('span', 'chip ' + (isManual ? 'chip-manual' : isPaper ? 'chip-paper' : 'chip-live'),
-      isManual ? 'MANUAL (you execute)' : isPaper ? 'SIMULATED (paper)' : 'REAL ORDERS (' + seq.venue + ')'));
-    if (seq.paused) chips.appendChild(el('span', 'chip chip-pausedbadge', 'PAUSED'));
+    chips.appendChild(el('span', 'chip ' + (isPaper ? 'chip-paper' : 'chip-live'),
+      isPaper ? 'SIMULATED (paper)' : 'REAL ORDERS (' + seq.venue + ')'));
     chips.appendChild(phaseChip(seq.phase));
-    if (seq.phase === 'running' && isManual) {
-      // Manual tracking: YOU are the venue. Record what you executed.
-      if (seq.deepestFilledLevel < seq.totalLevels) {
-        var buyBtn = el('button', 'tab', 'Buy L' + (seq.deepestFilledLevel + 1) + ' filled');
-        buyBtn.type = 'button';
-        buyBtn.addEventListener('click', function () { manualFill(seq.sequenceId, 'buy', this); });
-        chips.appendChild(buyBtn);
-      }
-      var sellBtn = el('button', 'tab', 'Sell filled');
-      sellBtn.type = 'button';
-      sellBtn.addEventListener('click', function () { manualFill(seq.sequenceId, 'sell', this); });
-      chips.appendChild(sellBtn);
-      var mStopBtn = el('button', 'stop', 'Stop tracking');
-      mStopBtn.type = 'button';
-      mStopBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, false); });
-      chips.appendChild(mStopBtn);
-    } else if (seq.phase === 'running') {
-      var pauseBtn = el('button', 'tab', seq.paused ? 'Resume bot' : 'Pause bot');
-      pauseBtn.type = 'button';
-      pauseBtn.addEventListener('click', function () { togglePause(seq.sequenceId, !seq.paused, this); });
-      chips.appendChild(pauseBtn);
-      if (!seq.paused) {
-        var checkBtn = el('button', 'tab', 'Check now');
-        checkBtn.type = 'button';
-        checkBtn.addEventListener('click', function () { checkNow(seq.sequenceId, this); });
-        chips.appendChild(checkBtn);
-        var resyncBtn = el('button', 'tab', 'Resync sell');
-        resyncBtn.type = 'button';
-        resyncBtn.addEventListener('click', function () { resyncSell(seq.sequenceId, this); });
-        chips.appendChild(resyncBtn);
-      }
+    if (seq.phase === 'running') {
+      var checkBtn = el('button', 'tab', 'Check now');
+      checkBtn.type = 'button';
+      checkBtn.addEventListener('click', function () { checkNow(seq.sequenceId, this); });
+      chips.appendChild(checkBtn);
+      var resyncBtn = el('button', 'tab', 'Resync sell');
+      resyncBtn.type = 'button';
+      resyncBtn.addEventListener('click', function () { resyncSell(seq.sequenceId, this); });
+      chips.appendChild(resyncBtn);
       var stopBtn = el('button', 'stop', 'Stop');
       stopBtn.type = 'button';
       stopBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, false); });
@@ -609,10 +579,9 @@ ${banner}
     stats.appendChild(stat('Level reached', seq.deepestFilledLevel + ' / ' + seq.totalLevels));
     stats.appendChild(stat('Budget', '$' + fmtPrice(seq.budget)));
     stats.appendChild(stat('Live price', seq.lastPrice === null ? 'waiting' : '$' + fmtPrice(seq.lastPrice)));
-    stats.appendChild(stat('Venue', isManual ? 'manual (your own exchange)' : seq.venue === 'paper' ? 'paper (simulated)' : seq.venue + ' (live)'));
+    stats.appendChild(stat('Venue', seq.venue === 'paper' ? 'paper (simulated)' : seq.venue + ' (live)'));
     stats.appendChild(stat('Last check', seq.lastCycleAt ? new Date(seq.lastCycleAt).toLocaleTimeString() : 'not yet'));
     stats.appendChild(stat('Last action', seq.lastAction || 'waiting for the first check'));
-    if (seq.paused) stats.appendChild(stat('Bot', 'paused — checks skip this sequence, resting orders untouched'));
     body.appendChild(stats);
 
     var ladder = el('div', 'ladder');
@@ -652,9 +621,8 @@ ${banner}
     // finished belongs to the Journal, with its metrics.
     var activeSeqs = state.sequences.filter(function (s) { return s.phase === 'running'; });
     var simCount = activeSeqs.filter(function (s) { return s.venue === 'paper'; }).length;
-    var manCount = activeSeqs.filter(function (s) { return s.venue === 'manual'; }).length;
     document.getElementById('dashCount').textContent =
-      activeSeqs.length + ' active (' + simCount + ' simulated, ' + manCount + ' manual, ' + (activeSeqs.length - simCount - manCount) + ' live)';
+      activeSeqs.length + ' active (' + simCount + ' simulated, ' + (activeSeqs.length - simCount) + ' live)';
 
     // Automatic checks: prove they are running, and say when the next is due.
     var checkLine = document.getElementById('dashChecks');
@@ -896,10 +864,11 @@ ${banner}
     box.textContent = text;
   }
 
-  function doStart(manual) {
-    var btn = document.getElementById(manual ? 'manualBtn' : 'startBtn');
+  document.getElementById('startForm').addEventListener('submit', function (event) {
+    event.preventDefault();
+    var btn = document.getElementById('startBtn');
     btn.disabled = true;
-    showMsg('ok', manual ? 'starting manual tracking...' : 'starting...');
+    showMsg('ok', 'starting...');
     fetch('/api/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -907,14 +876,13 @@ ${banner}
         symbol: document.getElementById('symbol').value,
         budget: Number(document.getElementById('budget').value),
         custom: customBody(),
-        manual: manual === true,
       }),
     })
       .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
       .then(function (result) {
         if (result.ok && result.body.ok) {
-          showMsg('ok', (manual ? 'Tracking ' : 'Started ') + result.body.summary.sequenceId + ' at $' + fmtPrice(result.body.summary.entryPrice) +
-            ' (' + result.body.summary.levels + ' levels).' + (manual ? ' Record your fills from the dashboard.' : ''));
+          showMsg('ok', 'Started ' + result.body.summary.sequenceId + ' at $' + fmtPrice(result.body.summary.entryPrice) +
+            ' (' + result.body.summary.levels + ' levels).');
           refresh();
         } else {
           showMsg('err', result.body && result.body.error ? result.body.error : 'start failed');
@@ -922,16 +890,6 @@ ${banner}
       })
       .catch(function () { showMsg('err', 'start failed: server unreachable'); })
       .then(function () { btn.disabled = false; });
-  }
-
-  document.getElementById('startForm').addEventListener('submit', function (event) {
-    event.preventDefault();
-    doStart(false);
-  });
-
-  document.getElementById('manualBtn').addEventListener('click', function () {
-    if (!window.confirm('Track manually? The plan is frozen now at the live price and the level-1 buy is recorded as filled — like on the site — but the runner places NOTHING: you execute every order on your own exchange and record the fills here.')) return;
-    doStart(true);
   });
 
   function postAction(url, id, btn, label) {
@@ -947,32 +905,6 @@ ${banner}
   }
 
   function checkNow(id, btn) { postAction('/api/check', id, btn, 'Check now'); }
-
-  function togglePause(id, paused, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = '...'; }
-    fetch('/api/pause', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sequenceId: id, paused: paused }) })
-      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
-      .then(function (r) {
-        if (!(r.ok && r.body.ok)) window.alert((r.body && r.body.error) || 'action failed');
-        refresh();
-      })
-      .catch(function () { window.alert('action failed: server unreachable'); });
-  }
-
-  function manualFill(id, kind, btn) {
-    var msg = kind === 'buy'
-      ? 'Record the next level buy as filled on ' + id + '? Only do this AFTER the buy actually filled on your exchange.'
-      : 'Record the sell as filled on ' + id + '? This completes the sequence. Only do this AFTER the sell actually filled on your exchange.';
-    if (!window.confirm(msg)) return;
-    if (btn) { btn.disabled = true; btn.textContent = '...'; }
-    fetch('/api/manual-fill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sequenceId: id, kind: kind }) })
-      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
-      .then(function (r) {
-        if (!(r.ok && r.body.ok)) window.alert((r.body && r.body.error) || 'action failed');
-        refresh();
-      })
-      .catch(function () { window.alert('action failed: server unreachable'); });
-  }
 
   function resyncSell(id, btn) {
     if (!window.confirm('Resync the sell for ' + id + '? The resting sell is canceled and re-placed from the plan for the level actually reached. The buy ladder is untouched.')) return;
@@ -1173,9 +1105,7 @@ ${banner}
       var head2 = el('div', 'jrow-head');
       head2.appendChild(el('span', 'jrow-arrow', '▶'));
       head2.appendChild(el('span', 'jrow-sym mono', e.symbol));
-      head2.appendChild(el('span',
-        'jrow-badge ' + (e.venue === 'manual' ? 'man' : e.live ? 'live' : 'sim'),
-        e.venue === 'manual' ? 'MANUAL' : e.live ? 'LIVE' : 'SIM'));
+      head2.appendChild(el('span', 'jrow-badge ' + (e.live ? 'live' : 'sim'), e.live ? 'LIVE' : 'SIM'));
       head2.appendChild(el('span', null, e.phase));
       head2.appendChild(el('span', 'jrow-spacer'));
       head2.appendChild(el('span', 'mono ' + (e.realized >= 0 ? 'sg-strong' : 'sg-misaligned'), money(e.realized)));
@@ -1187,7 +1117,7 @@ ${banner}
       var body2 = el('div', 'jrow-body');
       var grid = el('div', 'stats');
       grid.appendChild(stat('Sequence', e.sequenceId));
-      grid.appendChild(stat('Venue', e.venue === 'manual' ? 'manual (you executed)' : e.live ? e.venue + ' (real orders)' : 'paper (simulated)'));
+      grid.appendChild(stat('Venue', e.live ? e.venue + ' (real orders)' : 'paper (simulated)'));
       grid.appendChild(stat('Rounds reached', e.roundsReached + ' / ' + e.totalRounds));
       grid.appendChild(stat('Budget', '$' + fmtPrice(e.budget)));
       grid.appendChild(stat('Capital used', '$' + fmtPrice(e.capitalUsed)));
@@ -1198,15 +1128,13 @@ ${banner}
       grid.appendChild(stat('Started', new Date(e.startedAt).toLocaleString()));
       grid.appendChild(stat('Ended', e.endedAt ? new Date(e.endedAt).toLocaleString() : 'running'));
       body2.appendChild(grid);
-      // Simulated and manual runs can be removed (like on the site); history
-      // of runner-placed REAL orders is permanent.
-      var deletable = e.venue === 'paper' || e.venue === 'manual';
-      if (deletable && e.phase !== 'running') {
-        var del = el('button', 'stop', e.venue === 'manual' ? 'Delete this manual record' : 'Delete this simulated run');
+      // Simulated runs can be removed; live history is permanent.
+      if (!e.live && e.phase !== 'running') {
+        var del = el('button', 'stop', 'Delete this simulated run');
         del.type = 'button';
         del.addEventListener('click', function () { deleteSequence(e.sequenceId); });
         body2.appendChild(del);
-      } else if (!deletable) {
+      } else if (e.live) {
         var note = el('p', null, 'Live sequence: kept permanently, cannot be deleted.');
         note.style.cssText = 'font-size:10px;color:var(--faint);margin-top:6px';
         body2.appendChild(note);
