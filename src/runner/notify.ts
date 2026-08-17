@@ -46,3 +46,53 @@ export async function notify(text: string): Promise<boolean> {
 export function tag(venue: string): string {
   return venue === 'paper' ? '[SIMULATED]' : `[LIVE ${venue.toUpperCase()}]`;
 }
+
+export interface DetectedChat {
+  chatId: string;
+  /** First name / title of the chat, for "is this really me?" confirmation. */
+  name: string;
+}
+
+/**
+ * Find the chat id for the configured bot token by reading the bot's recent
+ * updates: the user talks to their bot once, we look at who talked. Throws
+ * with instructions (not codes) when something is missing — these messages
+ * are shown verbatim in the Keys page.
+ */
+export async function detectChatId(): Promise<DetectedChat> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error('Save the bot token first (step 1), then try again.');
+  let payload: {
+    ok?: boolean;
+    description?: string;
+    result?: Array<{
+      update_id: number;
+      message?: { chat?: { id?: number; first_name?: string; title?: string; username?: string } };
+      channel_post?: { chat?: { id?: number; first_name?: string; title?: string; username?: string } };
+    }>;
+  };
+  try {
+    const res = await fetch(`${API}/bot${token}/getUpdates`);
+    payload = (await res.json()) as typeof payload;
+  } catch {
+    throw new Error('Could not reach the Telegram API from this server. Check the network and try again.');
+  }
+  if (!payload.ok) {
+    throw new Error(
+      `Telegram rejected the bot token${payload.description ? ` (${payload.description})` : ''}. Re-copy it from @BotFather and save it again.`,
+    );
+  }
+  const updates = payload.result ?? [];
+  for (let i = updates.length - 1; i >= 0; i--) {
+    const chat = updates[i].message?.chat ?? updates[i].channel_post?.chat;
+    if (chat?.id !== undefined) {
+      return {
+        chatId: String(chat.id),
+        name: chat.first_name ?? chat.title ?? chat.username ?? 'unknown',
+      };
+    }
+  }
+  throw new Error(
+    'No message found yet. Open your bot in Telegram (t.me/YOUR_BOT_NAME), press Start or send it any message, then click Detect again.',
+  );
+}

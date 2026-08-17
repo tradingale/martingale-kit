@@ -44,7 +44,7 @@ import path from 'node:path';
 import { bulkCryptoPrices, bulkStockPrices, publicPrice } from '../runner/prices.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import { startingaleLabel } from '../runner/startingale.js';
-import { alertsConfigured, notify } from '../runner/notify.js';
+import { alertsConfigured, detectChatId, notify } from '../runner/notify.js';
 import { KEY_VARS, keysStatus, loadKeysIntoEnv, writeKeys, type KeyVar } from '../runner/keystore.js';
 import { renderPage } from './page.js';
 
@@ -400,6 +400,23 @@ const server = http.createServer(async (req, res) => {
       const hasCustom = Boolean(custom.deltaPrice || custom.nbRounds || custom.multipliers?.length);
       const preview = await previewSequence(symbol, budget, hasCustom ? custom : undefined);
       sendJson(res, 200, { ok: true, preview });
+      return;
+    }
+
+    if (route === 'POST /api/detect-chat-id') {
+      // Telegram onboarding step 3: the user has saved the bot token and
+      // messaged their bot once; we read getUpdates, find the chat, and
+      // SAVE the id straight into the keystore so there is nothing to copy.
+      try {
+        const found = await detectChatId();
+        writeKeys({ TELEGRAM_CHAT_ID: found.chatId });
+        process.env.TELEGRAM_CHAT_ID = found.chatId;
+        const sent = await notify('Tradingale Runner: alerts are wired to this chat. ✓');
+        log(`telegram chat id detected and saved (chat: ${found.name})`);
+        sendJson(res, 200, { ok: true, name: found.name, testSent: sent });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
 

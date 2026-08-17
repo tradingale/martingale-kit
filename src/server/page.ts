@@ -193,6 +193,11 @@ export function renderPage(mode: RunnerMode): string {
   .keygroup { border: 1px solid rgba(60,231,252,0.12); border-radius: 10px; padding: 12px; margin-bottom: 12px; background: rgba(15,23,42,0.35); }
   .keygroup-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
   .keygroup-sub { color: var(--faint); font-size: 11px; }
+  .keyhelp { margin-top: 8px; font-size: 10.5px; color: var(--faint); line-height: 1.55; }
+  .keyhelp a { color: var(--cyan); text-decoration: none; }
+  .keyhelp a:hover { text-decoration: underline; }
+  .keyhelp li { margin-bottom: 3px; }
+  .setup-banner { border: 1px solid rgba(60,231,252,0.35); background: rgba(8,51,68,0.35); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .kstatus { font-size: 11px; font-weight: 700; border-radius: 8px; padding: 2px 8px; border: 1px solid rgba(100,116,139,0.4); color: var(--faint); }
   .kstatus.on { color: #4ade80; border-color: rgba(74,222,128,0.45); background: rgba(34,197,94,0.08); }
   .keys-line { font-size: 11px; color: var(--muted); margin: -6px 0 16px; }
@@ -218,6 +223,10 @@ ${banner}
   </nav>
 
   <section id="pageScoreboard">
+  <div class="setup-banner" id="setupBanner" style="display:none">
+    <span style="flex:1;min-width:220px"><b>First step:</b> the runner needs your Tradingale API token to load scores and start sequences. It takes one minute and the free tier works (BTC).</span>
+    <button class="primary" id="setupGo" type="button">Set it up in Keys &amp; settings</button>
+  </div>
   <div class="card">
     <div class="card-head">
       <h2>Scoreboard</h2>
@@ -379,6 +388,9 @@ ${banner}
           <div class="controls">
             <div class="field" style="flex:1"><label for="kTgl">API token</label><input id="kTgl" type="password" placeholder="not set" autocomplete="new-password" style="width:100%;min-width:220px"></div>
           </div>
+          <p class="keyhelp">
+            Get it at <a href="https://tradingale.com/settings/api" target="_blank" rel="noopener">tradingale.com/settings/api</a> (log in &rarr; Settings &rarr; API &rarr; create a token). The free tier scopes BTC; paid plans scope the full catalog.
+          </p>
         </div>
 
         <div class="keygroup">
@@ -390,6 +402,9 @@ ${banner}
             <div class="field"><label for="kKk">API key</label><input id="kKk" type="password" placeholder="not set" autocomplete="new-password"></div>
             <div class="field"><label for="kKs">API secret</label><input id="kKs" type="password" placeholder="not set" autocomplete="new-password"></div>
           </div>
+          <p class="keyhelp">
+            Kraken &rarr; profile icon &rarr; Settings &rarr; <a href="https://pro.kraken.com/app/settings/api" target="_blank" rel="noopener">API</a> &rarr; Create key. Tick <b>Query</b> and <b>Create &amp; modify orders</b> and <b>Cancel orders</b> only — NEVER withdrawal. Add your server's IP to the key's allowlist if you can. Not needed for paper.
+          </p>
         </div>
 
         <div class="keygroup">
@@ -401,6 +416,9 @@ ${banner}
             <div class="field"><label for="kAk">API key id</label><input id="kAk" type="password" placeholder="not set" autocomplete="new-password"></div>
             <div class="field"><label for="kAs">API secret key</label><input id="kAs" type="password" placeholder="not set" autocomplete="new-password"></div>
           </div>
+          <p class="keyhelp">
+            <a href="https://app.alpaca.markets" target="_blank" rel="noopener">app.alpaca.markets</a> &rarr; API Keys (right-hand panel) &rarr; Generate. Paper-trading keys work too: launch with ALPACA_PAPER=true to target Alpaca's paper environment. Bonus once saved: US stock prices upgrade from the delayed feed to Alpaca live data.
+          </p>
         </div>
 
         <div class="keygroup">
@@ -410,11 +428,17 @@ ${banner}
           </div>
           <div class="controls">
             <div class="field"><label for="kTgBot">Bot token</label><input id="kTgBot" type="password" placeholder="not set" autocomplete="new-password"></div>
-            <div class="field"><label for="kTgChat">Chat id</label><input id="kTgChat" type="password" placeholder="not set" autocomplete="new-password"></div>
+            <div class="field"><label for="kTgChat">Chat id</label><input id="kTgChat" type="password" placeholder="auto-detected" autocomplete="new-password"></div>
+            <button class="tab" id="detectChat" type="button">Detect chat id</button>
             <button class="tab" id="testAlert" type="button">Send test alert</button>
           </div>
-          <p style="margin-top:8px;font-size:10px;color:var(--faint)">
-            Create a bot with @BotFather, then message it once and read your chat id from the API. Alerts fire on level reached, sequence complete, halt, start and stop; simulated runs are labelled SIMULATED.
+          <ol class="keyhelp" style="margin:8px 0 0;padding-left:18px">
+            <li>In Telegram, open <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>, send <b>/newbot</b>, follow the two questions. Copy the token it gives you, paste it above, <b>Save keys</b>.</li>
+            <li>Open the link BotFather shows for YOUR new bot (t.me/&hellip;) and press <b>Start</b> (or send it anything).</li>
+            <li>Click <b>Detect chat id</b> — the runner finds your chat, saves the id itself and sends a confirmation message. Done.</li>
+          </ol>
+          <p class="keyhelp">
+            Alerts fire on level reached, sequence complete, halt, start and stop; simulated runs are labelled SIMULATED. A Telegram outage never disturbs the trading loop.
           </p>
         </div>
 
@@ -616,6 +640,10 @@ ${banner}
       ', refreshed ' + new Date().toLocaleTimeString();
     document.getElementById('topMeta').textContent = meta;
     renderKeys(state.keys || {});
+    // First run: no Tradingale token means an empty scoreboard and refused
+    // starts. Say so, with the shortest path to fixing it.
+    var banner = document.getElementById('setupBanner');
+    if (banner) banner.style.display = state.keys && !state.keys.tradingale ? '' : 'none';
 
     // The dashboard is the live cockpit: ACTIVE sequences only. Anything
     // finished belongs to the Journal, with its metrics.
@@ -708,7 +736,7 @@ ${banner}
     rows.sort(function (a, b) { return catSortDesc ? b.score - a.score : a.score - b.score; });
     body.textContent = '';
     if (!rows.length) {
-      empty.textContent = CATALOG.length ? 'No match.' : 'Catalog empty (check your Tradingale token and plan scope).';
+      empty.textContent = CATALOG.length ? 'No match.' : 'Catalog empty: set your Tradingale API token in Keys & settings (free tier scopes BTC; paid plans scope the full catalog).';
       return;
     }
     empty.textContent = '';
@@ -978,6 +1006,23 @@ ${banner}
       .then(function () { btn.disabled = false; });
   });
 
+  document.getElementById('detectChat').addEventListener('click', function () {
+    var btn = this;
+    var box = document.getElementById('keysMsg');
+    btn.disabled = true; btn.textContent = 'detecting...';
+    fetch('/api/detect-chat-id', { method: 'POST' })
+      .then(function (res) { return res.json().then(function (b) { return { ok: res.ok, body: b }; }); })
+      .then(function (r) {
+        box.className = 'msg ' + (r.ok && r.body.ok ? 'ok' : 'err');
+        box.textContent = r.ok && r.body.ok
+          ? 'Chat found (' + r.body.name + ') and saved.' + (r.body.testSent ? ' Check Telegram for the confirmation message.' : '')
+          : ((r.body && r.body.error) || 'detection failed');
+        refresh();
+      })
+      .catch(function () { box.className = 'msg err'; box.textContent = 'detection failed: server unreachable'; })
+      .then(function () { btn.disabled = false; btn.textContent = 'Detect chat id'; });
+  });
+
   document.getElementById('testAlert').addEventListener('click', function () {
     var btn = this;
     var box = document.getElementById('keysMsg');
@@ -1144,6 +1189,7 @@ ${banner}
     });
   }
   document.getElementById('clearPaper').addEventListener('click', function () { clearFinished(); });
+  document.getElementById('setupGo').addEventListener('click', function () { showPage('keys'); });
   document.getElementById('navScoreboard').addEventListener('click', function () { showPage('scoreboard'); });
   document.getElementById('navDashboard').addEventListener('click', function () { showPage('dashboard'); });
   document.getElementById('navJournal').addEventListener('click', function () { showPage('journal'); });
