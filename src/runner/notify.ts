@@ -44,5 +44,7 @@ export async function notify(text: string): Promise<boolean> {
 
 /** Prefix every alert so a simulated run can never be mistaken for a real one. */
 export function tag(venue: string): string {
-  return venue === 'paper' ? '[SIMULATED]' : `[LIVE ${venue.toUpperCase()}]`;
+  if (venue === 'paper') return '[SIMULATED]';
+  if (venue === 'manual') return '[MANUAL]';
+  return `[LIVE ${venue.toUpperCase()}]`;
 }
