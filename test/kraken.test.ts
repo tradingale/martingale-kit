@@ -363,3 +363,14 @@ describe('kraken formatting helpers', () => {
     expect(formatKrakenPrice(100, 1, 'sell')).toBe('100.0'); // exact stays exact
   });
 });
+
+describe('cl_ord_id length (the 18-char lesson)', () => {
+  it('rejects free text over 18 chars, so engine ids ride userref pre-emptively', async () => {
+    const { isValidClOrdId } = await import('../src/adapters/kraken.js');
+    expect(isValidClOrdId('tgabc123r1b')).toBe(true);           // 11 chars
+    expect(isValidClOrdId('a'.repeat(18))).toBe(true);          // exactly 18
+    expect(isValidClOrdId('a'.repeat(19))).toBe(false);         // one too many
+    expect(isValidClOrdId('BTC-1755000000000-buy-1')).toBe(false); // engine id, 23 chars
+    expect(isValidClOrdId('1abc')).toBe(false);                 // leading digit
+  });
+});

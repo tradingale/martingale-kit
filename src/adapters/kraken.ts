@@ -23,11 +23,13 @@
 //    /0/public/AssetPairs. USD is preferred, USDC is the fallback quote.
 //  - Grids from AssetPairs pair_decimals / lot_decimals / ordermin (plus
 //    tick_size / costmin when Kraken declares them), exposed as getGrids().
-//  - cl_ord_id carries our engine clientId (lib/idempotency.ts documents the
-//    constraint: <= 32 chars, alphanumeric + `_-`, leading letter). When a
-//    clientId cannot be a cl_ord_id (or Kraken rejects the field), we fall
-//    back to a stable 31-bit `userref` derived from the clientId, persisted
-//    in a local mapping file so restarts can still match orders back.
+//  - cl_ord_id carries our engine clientId when it fits Kraken's REAL
+//    constraint: free text <= 18 chars, alphanumeric + `_-`, leading letter
+//    (longer free text gets EGeneral:Invalid arguments:cl_ord_id; only
+//    strict UUIDs may be longer). Engine ids like `BTC-<ts>-buy-1` exceed
+//    that, so in practice orders ride the stable 31-bit `userref` derived
+//    from the clientId, persisted in a local mapping file so restarts can
+//    still match orders back.
 //  - Sell volume haircut and the insufficient-volume retry (trading route
 //    fee adjustment + check-kraken retry loop): Kraken charges buy fees in
 //    the base currency, so a sell of the full planned cumulative quantity
@@ -143,9 +145,9 @@ export function krakenOrderStatus(status: string): OrderStatus {
   }
 }
 
-/** cl_ord_id constraint from lib/idempotency.ts: <=32 chars, [A-Za-z0-9_-], leading letter. */
+/** Kraken free-text cl_ord_id: <=18 chars, [A-Za-z0-9_-], leading letter (longer = rejected). */
 export function isValidClOrdId(clientId: string): boolean {
-  return /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(clientId);
+  return /^[A-Za-z][A-Za-z0-9_-]{0,17}$/.test(clientId);
 }
 
 /** Stable 31-bit FNV-1a hash of a clientId, for the userref fallback. */
