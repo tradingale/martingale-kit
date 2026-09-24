@@ -22,4 +22,18 @@ export {
   type KrakenAdapterOptions,
 } from './adapters/kraken.js';
 export { AlpacaAdapter, AlpacaHttpError, baseClientId, type AlpacaAdapterOptions } from './adapters/alpaca.js';
+export {
+  RevolutXAdapter,
+  RevolutXHttpError,
+  clientIdToUuid,
+  fetchRevolutXGrids,
+  revolutxGridsFromPairInfo,
+  revolutxOrderStatus,
+  revolutxSign,
+  revolutxSignatureMessage,
+  REVOLUTX_MAKER_FEE,
+  REVOLUTX_TAKER_FEE,
+  type RevolutXAdapterOptions,
+  type RevolutXPairInfo,
+} from './adapters/revolutx.js';
 export { TradingaleClient, type TradingaleInstrument } from './client.js';

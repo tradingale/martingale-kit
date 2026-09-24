@@ -11,7 +11,9 @@ This kit is everything that was hard to get right, as exact, tested TypeScript:
 - **A `PaperAdapter`**: local fill simulator. The whole engine runs end to end with zero keys, right now.
 - **A `TradingaleClient`**: fetches the model parameters from the [REST API](https://tradingale.com/settings/api).
 
-Exchange connectivity is a thin, replaceable layer: the `VenueAdapter` interface is documented, and one reference implementation ships in-repo (`KrakenAdapter`, ported from our production Kraken integration), behind an explicit live mode that is OFF by default. Other venues are left to you (or to your coding agent). Your adapter, your keys, your account, your sole responsibility. Tradingale never places orders, holds funds, or gives advice.
+Exchange connectivity is a thin, replaceable layer: the `VenueAdapter` interface is documented, and three implementations ship in-repo behind an explicit live mode that is OFF by default. `KrakenAdapter` and `AlpacaAdapter` are ported from our production integrations. `RevolutXAdapter` is newer and honest about it: its public endpoints and its signature construction are verified (the signature message is pinned byte for byte against the example Revolut publishes), but its authenticated response shapes come from the documentation alone, because we hold no key on that venue. Run one read-only call and correct whatever differs before trusting it with money. Other venues are left to you (or to your coding agent). Your adapter, your keys, your account, your sole responsibility. Tradingale never places orders, holds funds, or gives advice.
+
+Revolut X is worth knowing about if you are in Europe: 61 EUR-quoted pairs including BTC/EUR, a real central limit order book, and 0% maker fees. Funding in euros is where people get stuck on venues that only quote USD.
 
 ## The mental model, in five sentences
 
