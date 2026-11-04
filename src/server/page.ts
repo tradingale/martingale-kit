@@ -376,7 +376,7 @@ ${banner}
         Values are saved to this deployment's local keys file (owner-only), never displayed again, never logged, never served.
         Configuring keys does NOT switch to live: live requires relaunching with RUNNER_MODE=live.
         Over the network this form requires RUNNER_PASSWORD; otherwise use it from the machine itself.
-        Bonus: with Alpaca keys saved, US stock prices upgrade from the delayed feed to Alpaca live data.
+        US stock prices come from Alpaca and need its keys (free paper keys are enough; in paper mode orders stay simulated). Crypto works without keys.
         On Railway, mount a volume (RUNNER_STATE_DIR) so saved keys survive redeploys — or set them as service variables instead.
       </div>
       <form id="keysForm" autocomplete="off">
@@ -409,7 +409,7 @@ ${banner}
 
         <div class="keygroup">
           <div class="keygroup-head">
-            <div><b>Stocks</b> <span class="keygroup-sub">Alpaca — live US stock execution, and live stock prices</span></div>
+            <div><b>Stocks</b> <span class="keygroup-sub">Alpaca: US stock prices (required, paper or live) and live US stock execution</span></div>
             <span class="kstatus" id="stAlpaca">checking</span>
           </div>
           <div class="controls">
@@ -417,7 +417,7 @@ ${banner}
             <div class="field"><label for="kAs">API secret key</label><input id="kAs" type="password" placeholder="not set" autocomplete="new-password"></div>
           </div>
           <p class="keyhelp">
-            <a href="https://app.alpaca.markets" target="_blank" rel="noopener">app.alpaca.markets</a> &rarr; API Keys (right-hand panel) &rarr; Generate. Paper-trading keys work too: launch with ALPACA_PAPER=true to target Alpaca's paper environment. Bonus once saved: US stock prices upgrade from the delayed feed to Alpaca live data.
+            <a href="https://app.alpaca.markets" target="_blank" rel="noopener">app.alpaca.markets</a> &rarr; API Keys (right-hand panel) &rarr; Generate. Free paper-trading keys are enough for US stock prices in paper mode (data only, no order reaches Alpaca). For live, paper keys plus ALPACA_PAPER=true target Alpaca's paper environment.
           </p>
         </div>
 
@@ -669,7 +669,7 @@ ${banner}
       var done = state.sequences.length;
       host.appendChild(el('div', 'empty', done
         ? 'No active sequence. ' + done + ' finished one(s) are in the Journal.'
-        : 'No sequences yet. Pick an instrument on the Scoreboard; paper mode fills against live public prices with zero keys.'));
+        : 'No sequences yet. Pick an instrument on the Scoreboard; paper mode fills against live prices (crypto with zero keys, US stocks with free Alpaca paper keys).'));
       return;
     }
     for (var i = 0; i < activeSeqs.length; i++) host.appendChild(renderSequence(activeSeqs[i]));
@@ -702,6 +702,14 @@ ${banner}
     hint.appendChild(el('code', null, 'npm run runner -- keys'));
     hint.appendChild(document.createTextNode('. They are never displayed again, logged, or served.'));
     line.appendChild(hint);
+    if (!keys.alpaca) {
+      // Stocks have no keyless price feed: say what to set, and where.
+      var stockHint = el('div', 'keys-hint');
+      stockHint.appendChild(document.createTextNode('US stock prices need free Alpaca paper keys: set ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY in the Stocks group below, or with '));
+      stockHint.appendChild(el('code', null, 'npm run runner -- keys'));
+      stockHint.appendChild(document.createTextNode('. Crypto works without keys.'));
+      line.appendChild(stockHint);
+    }
   }
 
   var CATALOG = [];
@@ -748,7 +756,9 @@ ${banner}
       tr.appendChild(el('td', null, r.name || r.symbol));
       tr.appendChild(el('td', 'cat-score mono', Number(r.score).toFixed(2)));
       tr.appendChild(el('td', sgClass(r.startingale), r.startingale));
-      tr.appendChild(el('td', 'mono', r.price === null || r.price === undefined ? '—' : '$' + fmtPrice(r.price)));
+      // No price: the server's note when the user can fix it (stocks without
+      // Alpaca keys), a dash when the price is genuinely unavailable.
+      tr.appendChild(el('td', 'mono', r.price === null || r.price === undefined ? (r.priceNote || '—') : '$' + fmtPrice(r.price)));
       tr.addEventListener('click', function () { pickInstrument(r.symbol, r.assetType); });
       body.appendChild(tr);
     });
@@ -866,7 +876,9 @@ ${banner}
           // Cold start: the very first call returns rows before the bulk
           // price snapshot has landed. Poll briefly instead of leaving a
           // priceless scoreboard on screen.
-          var priced = CATALOG.filter(function (r) { return r.price; }).length;
+          // A row with a priceNote is resolved too (it will not get a price
+          // until keys are set), so it never keeps this loop polling.
+          var priced = CATALOG.filter(function (r) { return r.price || r.priceNote; }).length;
           if (!priced && !force) {
             document.getElementById('catEmpty').textContent = 'loading live prices...';
             setTimeout(function () { fetchCatalog(); }, 2500);

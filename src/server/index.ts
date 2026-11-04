@@ -12,7 +12,8 @@
 //   TRADINGALE_TOKEN   required to start sequences (model parameters)
 //   RUNNER_MODE        paper (default) | live
 //   KRAKEN_API_KEY / KRAKEN_API_SECRET      live crypto (Kraken)
-//   ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY  live US stocks (Alpaca)
+//   ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY  US stocks (Alpaca): prices in paper
+//                      (free paper keys are enough), orders in live
 //   ALPACA_PAPER       'true' points the Alpaca rail at its paper environment
 //   KRAKEN_API_KEY     live mode only
 //   KRAKEN_API_SECRET  live mode only
@@ -41,7 +42,8 @@ import {
 import { runnerDir } from '../runner/state.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { bulkCryptoPrices, bulkStockPrices, publicPrice } from '../runner/prices.js';
+import { bulkCryptoPrices, bulkStockPrices, hasAlpacaKeys, priceNote, publicPrice } from '../runner/prices.js';
+import { createPriceCache, sequencesWithDisplayPrices } from './priceCache.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
 import { startingaleLabel } from '../runner/startingale.js';
 import { alertsConfigured, detectChatId, notify } from '../runner/notify.js';
@@ -63,27 +65,11 @@ function log(msg: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Display price cache: /api/state never awaits the network (it doubles as
-// the deploy healthcheck), it serves cached prices and refreshes them in
-// the background.
+// Display price cache (src/server/priceCache.ts): /api/state never awaits
+// the network, and each price goes through its own asset path.
 // ---------------------------------------------------------------------------
 
-const priceCache = new Map<string, { price: number; at: number }>();
-const priceInflight = new Set<string>();
-const PRICE_TTL_MS = 25 * 1000;
-
-function cachedPrice(symbol: string, assetType: 'crypto' | 'stock' = 'crypto'): number | null {
-  const hit = priceCache.get(symbol);
-  const fresh = hit && Date.now() - hit.at < PRICE_TTL_MS;
-  if (!fresh && !priceInflight.has(symbol)) {
-    priceInflight.add(symbol);
-    publicPrice(symbol, assetType)
-      .then((price) => priceCache.set(symbol, { price, at: Date.now() }))
-      .catch(() => undefined)
-      .finally(() => priceInflight.delete(symbol));
-  }
-  return hit ? hit.price : null;
-}
+const prices = createPriceCache(publicPrice);
 
 // ---------------------------------------------------------------------------
 // Catalog: a scoreboard the browser can pick from, proxied through the server
@@ -100,6 +86,8 @@ interface CatalogRow {
   assetType: 'crypto' | 'stock';
   /** Live public price when already cached (top rows are prefetched). */
   price?: number | null;
+  /** Why the price is missing, when the user can fix it (stocks without Alpaca keys). */
+  priceNote?: string | null;
 }
 
 // Prices for the WHOLE catalog come from bulk snapshots (two public calls
@@ -174,14 +162,15 @@ async function getCatalog(): Promise<CatalogRow[]> {
 }
 
 // Serve the catalog with whatever live prices are cached, warming the top
-// rows in the background (cachedPrice triggers the fetch and returns null
+// rows in the background (prices.cachedPrice triggers the fetch and returns null
 // until it lands; the UI polls, so prices fill in within seconds).
 function catalogWithPrices(rows: CatalogRow[]): CatalogRow[] {
   refreshCatalogPrices(rows); // background; serves what is already known
-  return rows.map((row) => ({
-    ...row,
-    price: catalogPrices.get(row.symbol) ?? priceCache.get(row.symbol)?.price ?? null,
-  }));
+  const alpacaKeys = hasAlpacaKeys();
+  return rows.map((row) => {
+    const price = catalogPrices.get(row.symbol) ?? prices.peek(row.symbol, row.assetType);
+    return { ...row, price, priceNote: priceNote(row.assetType, price, alpacaKeys) };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -251,10 +240,7 @@ function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown
 }
 
 function stateBody(): unknown {
-  const sequences = statusAll().map((s) => {
-    const cached = cachedPrice(s.symbol);
-    return { ...s, lastPrice: cached ?? s.lastPrice };
-  });
+  const sequences = sequencesWithDisplayPrices(statusAll(), prices);
   return {
     ok: true,
     mode: MODE,
@@ -504,7 +490,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const price = await publicPrice(symbol, assetType);
-      priceCache.set(symbol, { price, at: Date.now() });
+      prices.set(symbol, assetType, price);
       sendJson(res, 200, { ok: true, symbol, price, assetType });
       return;
     }
@@ -600,6 +586,9 @@ server.listen(PORT, '0.0.0.0', () => {
   log(`mode: ${MODE}${MODE === 'live' ? ' (REAL ORDERS on your Kraken account)' : ' (simulated, the default)'}`);
   if (MODE === 'live' && !krakenKeysPresent()) {
     log('live mode without KRAKEN_API_KEY / KRAKEN_API_SECRET: starts will be refused until keys are set');
+  }
+  if (!hasAlpacaKeys()) {
+    log('no Alpaca keys: US stock prices unavailable until ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY are set (free paper keys work); crypto needs none');
   }
   log(PASSWORD ? 'Basic Auth: enabled (RUNNER_PASSWORD)' : 'Basic Auth: DISABLED (set RUNNER_PASSWORD to guard this UI)');
   log('reconciliation loop: running on a schedule, sequential');

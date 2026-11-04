@@ -22,7 +22,8 @@ Env: TRADINGALE_TOKEN (required, from https://tradingale.com/settings/api;
 free tier covers BTC). RUNNER_MODE=live is decided ONLY by the environment at
 launch — nothing else can escalate paper to live. Live keys: KRAKEN_API_KEY/
 KRAKEN_API_SECRET (crypto), ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY (US
-stocks; ALPACA_PAPER=true targets Alpaca's paper env). Optional:
+stocks; ALPACA_PAPER=true targets Alpaca's paper env). US stock PRICES need
+the Alpaca keys even in paper (free paper keys suffice); crypto needs none. Optional:
 RUNNER_PASSWORD (Basic Auth), RUNNER_STATE_DIR (persistent state dir).
 
 Tradingale API shape (do not guess it):

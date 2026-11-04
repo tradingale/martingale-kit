@@ -159,7 +159,7 @@ async function cmdKeys(): Promise<void> {
     { key: 'TRADINGALE_TOKEN', label: 'Tradingale API token (tradingale.com/settings/api)' },
     { key: 'KRAKEN_API_KEY', label: 'Kraken API key (live crypto; trade-only, no withdrawal)' },
     { key: 'KRAKEN_API_SECRET', label: 'Kraken API secret' },
-    { key: 'ALPACA_API_KEY_ID', label: 'Alpaca API key id (live US stocks)' },
+    { key: 'ALPACA_API_KEY_ID', label: 'Alpaca API key id (US stock prices; live US stocks)' },
     { key: 'ALPACA_API_SECRET_KEY', label: 'Alpaca API secret key' },
   ];
   const entries: Partial<Record<KeyVar, string>> = {};

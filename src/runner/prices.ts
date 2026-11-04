@@ -1,7 +1,50 @@
-// Public price feeds for the runner (no keys needed). Paper mode drives the
-// PaperAdapter with real market prices; live mode uses the venue's own
-// ticker. Simple REST polling: the runner reconciles on a slow loop by
-// design (handbook, section 4), sub-second feeds buy nothing here.
+// Price feeds for the runner. Paper mode drives the PaperAdapter with real
+// market prices; live mode uses the venue's own ticker. Simple REST polling:
+// the runner reconciles on a slow loop by design (handbook, section 4),
+// sub-second feeds buy nothing here.
+//
+// Crypto needs no keys (public Binance / Kraken tickers). US stocks need the
+// user's free Alpaca paper keys (ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY),
+// used for market DATA only: in paper mode orders stay simulated. There is no
+// keyless stock fallback on purpose. The free CSV feed we used (Stooq) stopped
+// serving CSV in November 2026, and we do not scrape unofficial sources.
+
+/** The one message shown wherever a stock price is asked for without keys. */
+export const STOCK_KEYS_REQUIRED_MESSAGE =
+  'US stocks need free Alpaca paper keys (ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY). Crypto works without keys.';
+
+/** Short form for the scoreboard price column. */
+export const STOCK_KEYS_REQUIRED_SHORT = 'needs Alpaca paper keys';
+
+/** Thrown when a US stock price is requested without Alpaca keys. */
+export class StockKeysMissingError extends Error {
+  readonly code = 'STOCK_KEYS_MISSING';
+  constructor() {
+    super(STOCK_KEYS_REQUIRED_MESSAGE);
+    this.name = 'StockKeysMissingError';
+  }
+}
+
+/** Presence only: both Alpaca key env vars are set. */
+export function hasAlpacaKeys(): boolean {
+  return Boolean(process.env.ALPACA_API_KEY_ID && process.env.ALPACA_API_SECRET_KEY);
+}
+
+/**
+ * What the scoreboard shows in place of a missing price: the short keys
+ * message for a stock when the Alpaca keys are absent, null otherwise (the
+ * UI then shows a dash: the price is genuinely unavailable, e.g. a crypto
+ * no public venue lists).
+ */
+export function priceNote(
+  assetType: 'crypto' | 'stock',
+  price: number | null | undefined,
+  alpacaKeys: boolean,
+): string | null {
+  if (price !== null && price !== undefined) return null;
+  if (assetType === 'stock' && !alpacaKeys) return STOCK_KEYS_REQUIRED_SHORT;
+  return null;
+}
 
 export type PriceSource = (symbol: string) => Promise<number>;
 
@@ -81,8 +124,8 @@ export async function bulkCryptoPrices(symbols: string[]): Promise<Map<string, n
 /**
  * Bulk US stock prices via Alpaca's snapshots endpoint (one call for the
  * whole list) when the user's Alpaca keys are configured. Without keys
- * there is no free bulk quote source, so the map comes back empty and the
- * UI resolves prices one at a time on click.
+ * the map comes back empty and the scoreboard says the keys are needed
+ * (see priceNote).
  */
 export async function bulkStockPrices(symbols: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
@@ -107,8 +150,8 @@ export async function bulkStockPrices(symbols: string[]): Promise<Map<string, nu
 }
 
 /**
- * Alpaca live stock price (latest trade) — used automatically when the user
- * has configured ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY. The data API
+ * Alpaca stock price (latest trade), the only stock price source. Needs the
+ * user's ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY (free paper keys work). The data API
  * host is the same for paper and live accounts, and the free feed works
  * with any account's keys. Keys go out as headers to Alpaca only; they are
  * never logged or served.
@@ -116,7 +159,7 @@ export async function bulkStockPrices(symbols: string[]): Promise<Map<string, nu
 export async function alpacaStockPrice(symbol: string): Promise<number> {
   const key = process.env.ALPACA_API_KEY_ID;
   const secret = process.env.ALPACA_API_SECRET_KEY;
-  if (!key || !secret) throw new Error('Alpaca keys not configured');
+  if (!key || !secret) throw new StockKeysMissingError();
   const res = await fetch(
     `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol.toUpperCase())}/trades/latest`,
     { headers: { 'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret } },
@@ -129,11 +172,11 @@ export async function alpacaStockPrice(symbol: string): Promise<number> {
 }
 
 /**
- * Stooq free CSV quote for US stocks (no key required, delayed; the delay
- * is disclosed in the README and the UI). Fine for a paper runner
- * reconciling on a schedule.
+ * UNUSED, kept for reference. Stooq stopped serving CSV in November 2026
+ * (the endpoint now answers a 404 HTML anti-bot page), so stocks need
+ * Alpaca keys instead. Not exported and not called anywhere.
  */
-export async function stooqStockPrice(symbol: string): Promise<number> {
+async function stooqStockPrice(symbol: string): Promise<number> {
   const res = await fetch(
     `https://stooq.com/q/l/?s=${symbol.toLowerCase()}.us&f=sd2t2ohlcv&h&e=csv`,
   );
@@ -147,19 +190,13 @@ export async function stooqStockPrice(symbol: string): Promise<number> {
 
 /**
  * Crypto: Binance first, Kraken fallback (public tickers, live, no keys).
- * Stocks: Alpaca live when the user's keys are configured, otherwise the
- * free delayed feed.
+ * Stocks: Alpaca with the user's keys; without them, a StockKeysMissingError
+ * (thrown before any network call). No keyless stock fallback.
  */
 export async function publicPrice(symbol: string, assetType: 'crypto' | 'stock' = 'crypto'): Promise<number> {
   if (assetType === 'stock') {
-    if (process.env.ALPACA_API_KEY_ID && process.env.ALPACA_API_SECRET_KEY) {
-      try {
-        return await alpacaStockPrice(symbol);
-      } catch {
-        return await stooqStockPrice(symbol);
-      }
-    }
-    return stooqStockPrice(symbol);
+    if (!hasAlpacaKeys()) throw new StockKeysMissingError();
+    return alpacaStockPrice(symbol);
   }
   try {
     return await binancePublicPrice(symbol);

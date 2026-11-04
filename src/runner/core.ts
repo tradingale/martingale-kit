@@ -6,6 +6,9 @@
 // explicit opt-in that refuses to start without keys. Even paper mode snaps
 // ladders to the real Kraken grids when they can be fetched (public
 // endpoint, zero keys), so paper plans match what live would submit.
+// Paper crypto needs no keys at all; paper US stocks need the user's free
+// Alpaca paper keys for prices (data only, see prices.ts), and a start
+// without them is refused by publicPrice before anything is persisted.
 
 import { budgetMin, checkLadderAgainstGrids, computeLadder } from '../ladder.js';
 import { buildPlan, entryActions, initialState, reconcile, type EngineAction } from '../engine.js';
@@ -942,6 +945,8 @@ export interface SequenceStatus {
   sequenceId: string;
   symbol: string;
   venue: 'paper' | 'kraken' | 'alpaca';
+  /** From the plan file; older files without it: Alpaca means stock, else crypto. */
+  assetType: 'crypto' | 'stock';
   phase: string;
   haltReason: string | null;
   budget: number;
@@ -957,6 +962,15 @@ export interface SequenceStatus {
   levels: LadderLevel[];
 }
 
+/**
+ * A sequence's asset class. Plan files written before assetType existed
+ * fall back the way the cycle code does: an Alpaca venue means stock,
+ * anything else crypto.
+ */
+export function sequenceAssetType(file: Pick<RunnerFile, 'assetType' | 'venue'>): 'crypto' | 'stock' {
+  return file.assetType ?? (file.venue === 'alpaca' ? 'stock' : 'crypto');
+}
+
 export function statusAll(): SequenceStatus[] {
   const statuses: SequenceStatus[] = [];
   for (const id of listRuns()) {
@@ -966,6 +980,7 @@ export function statusAll(): SequenceStatus[] {
       sequenceId: id,
       symbol: file.symbol,
       venue: file.venue,
+      assetType: sequenceAssetType(file),
       phase: file.state.phase,
       haltReason: file.state.haltReason,
       budget: file.budget,
