@@ -345,6 +345,27 @@ describe('kraken snapshots', () => {
     expect(calls.find((c) => c.url.includes('/private/ClosedOrders'))!.body).toContain('start=1700000000');
   });
 
+  it('getOrderFill: on the book is not final; in ClosedOrders it is, with its executed part', async () => {
+    const closed = {
+      'OTX-9': {
+        status: 'canceled', vol: '0.50000000', vol_exec: '0.20000000', price: '99.8', closetm: 1700000000,
+        cl_ord_id: 'BTC-1-buy-1', descr: { type: 'buy', ordertype: 'market', price: '0' },
+      },
+    };
+    const onBook = makeAdapter((call) => {
+      if (call.url.includes('/private/OpenOrders')) return { json: { error: [], result: { open: OPEN_ORDERS } } };
+      return { json: { error: [], result: { closed: {}, count: 0 } } };
+    });
+    expect(await onBook.adapter.getOrderFill('BTC-1-sell-2')).toEqual({ status: 'open', final: false, filledQty: 0, avgPrice: 0 });
+    const gone = makeAdapter((call) => {
+      if (call.url.includes('/private/OpenOrders')) return { json: { error: [], result: { open: {} } } };
+      if (call.url.includes('/private/ClosedOrders')) return { json: { error: [], result: { closed, count: 1 } } };
+      return { json: { error: [], result: {} } };
+    });
+    expect(await gone.adapter.getOrderFill('BTC-1-buy-1')).toEqual({ status: 'canceled', final: true, filledQty: 0.2, avgPrice: 99.8 });
+    expect(await gone.adapter.getOrderFill('BTC-1-buy-4')).toBeNull();
+  });
+
   it('maps Kraken statuses onto the kit statuses', () => {
     expect(krakenOrderStatus('open')).toBe('open');
     expect(krakenOrderStatus('pending')).toBe('open');

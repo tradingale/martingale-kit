@@ -42,6 +42,14 @@ Engine invariants (violating these is THE classic integration bug):
   - total planned cost never exceeds the budget: after the market entry fills,
     rescaleAfterEntry fits levels 2+ to its real cost (prices unchanged), then
     the limit buys are placed
+  - live start: refused up front if a level 1 fill 3% above the ticker would
+    break the venue minimums; an entry with no fill within 10 s is canceled
+    and the start aborted (nothing started, kept as "not started" and out of
+    every metric; a partial fill revealed by the cancel becomes level 1; the
+    optional VenueAdapter.getOrderFill lets the runner wait out a cancel that
+    has not settled, and halt if it never does); if level 1 filled but the fitted ladder is still
+    refused, the sequence halts with no limit buy and stop <id> --reverse
+    sells level 1
 
 Wording rules when building on this: the metrics are descriptive, never
 signals/advice/forecasts; simulated results must be labeled simulated.

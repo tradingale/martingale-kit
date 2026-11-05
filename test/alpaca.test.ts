@@ -25,6 +25,11 @@ function mockAlpaca() {
       orders.set(id, { id, ...body, status: 'new', filled_qty: '0' });
       return respond(200, orders.get(id));
     }
+    if (method === 'GET' && u.includes('/v2/orders:by_client_order_id?')) {
+      const wanted = new URL(u).searchParams.get('client_order_id');
+      const found = [...orders.values()].find((o) => o.client_order_id === wanted);
+      return found ? respond(200, found) : respond(404, { message: 'order not found' });
+    }
     if (method === 'GET' && u.includes('/v2/orders?')) {
       const wantOpen = u.includes('status=open');
       const list = [...orders.values()].filter((o) =>
@@ -55,6 +60,11 @@ function mockAlpaca() {
           o.filled_avg_price = String(price);
           o.filled_at = new Date(0).toISOString();
         }
+      }
+    },
+    set(clientOrderId: string, fields: Record<string, unknown>) {
+      for (const o of orders.values()) {
+        if (o.client_order_id === clientOrderId) Object.assign(o, fields);
       }
     },
     expire(clientOrderId: string) {
@@ -113,6 +123,27 @@ describe('AlpacaAdapter', () => {
     expect(fills).toEqual([
       expect.objectContaining({ clientId: 's1-buy-1', side: 'buy', price: 101.5, quantity: 2 }),
     ]);
+  });
+
+  it('getOrderFill: pending_cancel is not final, then canceled with a partial fill is', async () => {
+    const { fetchFn, control } = mockAlpaca();
+    const a = new AlpacaAdapter(opts(fetchFn as unknown as typeof fetch, 'stock'));
+    await a.placeOrder({ clientId: 's1-buy-1', side: 'buy', type: 'market', quantity: 2, level: 1 });
+    control.set('s1-buy-1', { status: 'pending_cancel', filled_qty: '0.5', filled_avg_price: '100.2' });
+    expect(await a.getOrderFill('s1-buy-1')).toEqual({ status: 'pending_cancel', final: false, filledQty: 0.5, avgPrice: 100.2 });
+    control.set('s1-buy-1', { status: 'canceled' });
+    expect(await a.getOrderFill('s1-buy-1')).toEqual({ status: 'canceled', final: true, filledQty: 0.5, avgPrice: 100.2 });
+    // getFills is unchanged: a canceled order is not a fill there.
+    expect(await a.getFills()).toEqual([]);
+  });
+
+  it('getOrderFill: canceled with nothing executed, and an unknown order', async () => {
+    const { fetchFn } = mockAlpaca();
+    const a = new AlpacaAdapter(opts(fetchFn as unknown as typeof fetch, 'stock'));
+    await a.placeOrder({ clientId: 's1-buy-1', side: 'buy', type: 'market', quantity: 2, level: 1 });
+    await a.cancelOrder('s1-buy-1');
+    expect(await a.getOrderFill('s1-buy-1')).toEqual({ status: 'canceled', final: true, filledQty: 0, avgPrice: 0 });
+    expect(await a.getOrderFill('nope')).toBeNull();
   });
 
   it('cancel is idempotent and only cancels open orders', async () => {

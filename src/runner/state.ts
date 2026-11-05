@@ -35,6 +35,19 @@ export interface RunnerFile {
   lastCycleAt?: string;
   /** What that cycle actually did, in plain words (dashboard visibility). */
   lastAction?: string;
+  /**
+   * Set when the start halted with level 1 filled and the fitted ladder
+   * refused (no limit buy placed): the one halted state `stop --reverse`
+   * accepts, so the kit can sell level 1. Cleared when stopped.
+   */
+  entryHalt?: boolean;
+  /**
+   * Set when a live start was aborted because the market entry never filled
+   * (canceled, nothing bought). The file is kept as a record, but the
+   * sequence never existed for the metrics: journalMetrics skips it and the
+   * journal lists it as 'not started'.
+   */
+  neverStarted?: boolean;
 }
 
 export function runnerDir(): string {

@@ -587,6 +587,11 @@ ${banner}
       reverseBtn.type = 'button';
       reverseBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, true); });
       chips.appendChild(reverseBtn);
+    } else if (seq.entryHalt) {
+      var sellBtn = el('button', 'stop', 'Stop + reverse (sell level 1)');
+      sellBtn.type = 'button';
+      sellBtn.addEventListener('click', function () { stopSequence(seq.sequenceId, true); });
+      chips.appendChild(sellBtn);
     }
     head.appendChild(chips);
     card.appendChild(head);
@@ -595,7 +600,7 @@ ${banner}
 
     if (seq.haltReason) {
       body.appendChild(el('p', 'halt-note', 'Halted: ' + seq.haltReason +
-        (seq.venue === 'kraken' ? ' Cancel your open orders on Kraken yourself.' : '')));
+        (seq.venue === 'kraken' && seq.phase === 'halted' && !seq.entryHalt ? ' Cancel your open orders on Kraken yourself.' : '')));
     }
 
     var stats = el('div', 'stats');

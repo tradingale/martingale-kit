@@ -384,7 +384,7 @@ const server = http.createServer(async (req, res) => {
         multipliers: multRaw ? multRaw.split(',').map(Number).filter((n) => Number.isFinite(n) && n > 0) : undefined,
       };
       const hasCustom = Boolean(custom.deltaPrice || custom.nbRounds || custom.multipliers?.length);
-      const preview = await previewSequence(symbol, budget, hasCustom ? custom : undefined);
+      const preview = await previewSequence(symbol, budget, hasCustom ? custom : undefined, MODE);
       sendJson(res, 200, { ok: true, preview });
       return;
     }

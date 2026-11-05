@@ -12,7 +12,7 @@ export {
   type EngineAction,
   type VenueSnapshot,
 } from './engine.js';
-export type { VenueAdapter } from './adapters/types.js';
+export type { OrderFill, VenueAdapter } from './adapters/types.js';
 export { PaperAdapter } from './adapters/paper.js';
 export {
   KrakenAdapter,

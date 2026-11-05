@@ -44,7 +44,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Fill, OrderStatus, PlannedOrder, VenueGrids, VenueOrder } from '../types.js';
-import type { VenueAdapter } from './types.js';
+import type { OrderFill, VenueAdapter } from './types.js';
 
 const KRAKEN_API_URL = 'https://api.kraken.com';
 const API_VERSION = '0';
@@ -565,6 +565,47 @@ export class KrakenAdapter implements VenueAdapter {
       if (entries.length === 0 || offset >= total) break;
     }
     return fills;
+  }
+
+  /**
+   * ClosedOrders, every page (bounded), since sinceMs when set. Same paging
+   * as getFills, kept separate so getFills stays exactly as it was.
+   */
+  private async fetchClosedOrdersRaw(): Promise<KrakenRestOrder[]> {
+    const all: KrakenRestOrder[] = [];
+    let offset = 0;
+    for (let page = 0; page < 20; page++) {
+      const params: Record<string, string> = { ofs: String(offset) };
+      if (this.sinceMs !== null) params.start = String(Math.floor(this.sinceMs / 1000));
+      const result = await this.privateRequest<{
+        closed?: Record<string, KrakenRestOrder>;
+        count?: number;
+      }>('/private/ClosedOrders', params);
+      const entries = Object.values(result.closed ?? {});
+      all.push(...entries);
+      offset += entries.length;
+      const total = result.count ?? entries.length;
+      if (entries.length === 0 || offset >= total) break;
+    }
+    return all;
+  }
+
+  /**
+   * One order's record (VenueAdapter.getOrderFill): still on the book
+   * (open/pending, not final) or in ClosedOrders (closed/canceled/expired,
+   * final), with its executed volume. Null when Kraken lists it nowhere yet.
+   */
+  async getOrderFill(clientId: string): Promise<OrderFill | null> {
+    const toFill = (raw: KrakenRestOrder, final: boolean): OrderFill => ({
+      status: raw.status,
+      final,
+      filledQty: parseFloat(raw.vol_exec) || 0,
+      avgPrice: raw.price ? parseFloat(raw.price) || 0 : 0,
+    });
+    const open = Object.values(await this.fetchOpenOrdersRaw()).find((o) => this.clientIdOfRestOrder(o) === clientId);
+    if (open) return toFill(open, false);
+    const closed = (await this.fetchClosedOrdersRaw()).find((o) => this.clientIdOfRestOrder(o) === clientId);
+    return closed ? toFill(closed, true) : null;
   }
 }
 

@@ -22,7 +22,7 @@
 // of its own).
 
 import type { Fill, PlannedOrder, VenueGrids, VenueOrder } from '../types.js';
-import type { VenueAdapter } from './types.js';
+import type { OrderFill, VenueAdapter } from './types.js';
 
 export interface AlpacaAdapterOptions {
   /** Plain symbol as Tradingale serves it: "BTC" (crypto) or "AAPL" (stock). */
@@ -50,6 +50,9 @@ interface AlpacaOrder {
 }
 
 const OPEN_STATUSES = new Set(['new', 'accepted', 'pending_new', 'partially_filled', 'accepted_for_bidding']);
+
+/** Statuses Alpaca never moves an order out of. pending_cancel is NOT one. */
+const FINAL_STATUSES = new Set(['filled', 'canceled', 'expired', 'rejected', 'replaced']);
 
 function toStatus(s: string): VenueOrder['status'] {
   if (OPEN_STATUSES.has(s)) return 'open';
@@ -199,6 +202,30 @@ export class AlpacaAdapter implements VenueAdapter {
         quantity: parseFloat(o.filled_qty ?? '0'),
         timestamp: o.filled_at ? Date.parse(o.filled_at) : 0,
       }));
+  }
+
+  /**
+   * The entry order's own record (VenueAdapter.getOrderFill). Unlike
+   * getFills, this sees a canceled order's partial execution and tells a
+   * settled cancel from a pending_cancel one.
+   */
+  async getOrderFill(clientId: string): Promise<OrderFill | null> {
+    let order: AlpacaOrder;
+    try {
+      order = await this.request<AlpacaOrder>(
+        'GET',
+        `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientId)}`,
+      );
+    } catch (e) {
+      if (e instanceof AlpacaHttpError && e.status === 404) return null;
+      throw e;
+    }
+    return {
+      status: order.status,
+      final: FINAL_STATUSES.has(order.status),
+      filledQty: parseFloat(order.filled_qty ?? '0') || 0,
+      avgPrice: parseFloat(order.filled_avg_price ?? '0') || 0,
+    };
   }
 
   private toVenueOrder(o: AlpacaOrder): VenueOrder {

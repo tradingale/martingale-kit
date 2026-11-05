@@ -7,7 +7,7 @@ This kit is everything that was hard to get right, as exact, tested TypeScript:
 - **The ladder math**: `computeLadder()` turns [Tradingale's](https://tradingale.com) dimensionless model parameters plus your budget and a live entry price into a complete plan. Including the rule that breaks most integrations: multipliers scale QUANTITIES, never dollar costs.
 - **The state machine**: plan-in-database pattern, the one-active-sell invariant with structural cancel-verify-place, a pure `reconcile()` you can unit test.
 - **Directional grid snapping**: exit prices UP, buy prices DOWN, quantities floored. The sub-$1 rounding lesson is a test fixture.
-- **The budget is a ceiling**: a market entry that fills above the price used to size it would otherwise overspend by budget x initial bet ratio x slippage. `rescaleAfterEntry()` fits the deeper levels to what level 1 really cost (one common factor, quantities floored, prices untouched) and refuses the ladder if that breaks the venue minimums. The runner places the limit buys only after that.
+- **The budget is a ceiling**: a market entry that fills above the price used to size it would otherwise overspend by budget x initial bet ratio x slippage. `rescaleAfterEntry()` fits the deeper levels to what level 1 really cost (one common factor, quantities floored, prices untouched) and refuses the ladder if that breaks the venue minimums. The runner places the limit buys only after that. A live start first checks that a level 1 fill 3% above the ticker would still clear the venue minimums, and refuses up front otherwise (a live preview lists the same refusal). If the market entry shows no fill within 10 seconds, the runner cancels it and aborts: nothing is started, try again (for US stocks, the market may be closed). The aborted start stays on file and in the journal as "not started", and no metric counts it. If the cancel reveals a partial fill, that part becomes level 1 and the sequence continues on it. Adapters that implement the optional `getOrderFill()` (Kraken and Alpaca do) let the runner read the entry order's own record and wait out a cancel that has not settled yet (Alpaca's `pending_cancel`); if it never settles, the sequence halts with no limit buy placed. In the rare case where level 1 filled but the fitted ladder is still refused, the sequence halts with no limit buy placed, and `stop <id> --reverse` sells level 1 through the kit.
 - **`budgetMin()`**: the minimum viable capital for a venue's grids, so a runner refuses to start instead of placing a distorted ladder.
 - **A `PaperAdapter`**: local fill simulator. The whole engine runs end to end with zero keys, right now.
 - **A `TradingaleClient`**: fetches the model parameters from the [REST API](https://tradingale.com/settings/api).
@@ -65,7 +65,7 @@ npm run runner -- stop <id>                          # cancel open orders, keep 
 npm run runner -- stop <id> --reverse                # cancel AND market-sell the position
 ```
 
-Stop mirrors the Tradingale dashboard: `stop <id>` cancels the resting buys and the active sell but keeps whatever you have accumulated; add `--reverse` to also market-sell that position and exit completely. Get the `<id>` from `status`.
+Stop mirrors the Tradingale dashboard: `stop <id>` cancels the resting buys and the active sell but keeps whatever you have accumulated; add `--reverse` to also market-sell that position and exit completely. Get the `<id>` from `status`. A sequence halted at start with level 1 filled and no limit buy placed accepts `stop <id> --reverse` too (Stop + reverse in the web runner), so you can sell level 1 without leaving the kit.
 
 - Crypto AND US stocks both run in paper. Crypto needs no keys: prices come from public exchange tickers. US stocks need free Alpaca paper keys (ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY), used for price data only: in paper mode orders stay simulated and no order reaches Alpaca. Without them, a stock start is refused with a message saying so. Live mode routes by asset class: Kraken carries crypto (KRAKEN_API_KEY / KRAKEN_API_SECRET), Alpaca carries US stocks (ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY; set ALPACA_PAPER=true to point the same rail at Alpaca's paper environment). Stock sequences refuse to start while the US market is closed, stock day orders are re-placed automatically after expiry, and your keys never leave your deployment.
 - The plan is persisted to `.martingale-runner/` before anything is placed (atomic writes); a crash or reboot resumes by replaying the file, exactly like the handbook says. The paper venue's book (fills AND still-resting orders) is persisted too, so a one-shot `cycle` in a fresh process sees the active sell instead of placing another.
@@ -157,7 +157,9 @@ Build me a runner on top of the kit:
 2. Use computeLadder / buildPlan / runCycle exactly as designed; never
    reimplement the math. Check budgetMin before starting. Place the market
    entry alone, then rescaleAfterEntry with its real fill before placing the
-   limit buys, so a slipped entry never overspends the budget.
+   limit buys, so a slipped entry never overspends the budget. If the entry
+   does not fill within a few seconds, cancel it and abort the start (a
+   partial fill revealed by the cancel becomes level 1).
 3. Wire the PaperAdapter first and drive it with live prices from the venue's
    public ticker, so I can watch full sequences run with zero keys.
 4. Implement the VenueAdapter interface for [MY VENUE] from its official API

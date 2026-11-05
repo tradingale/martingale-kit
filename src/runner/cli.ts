@@ -84,6 +84,10 @@ async function cmdStop(): Promise<void> {
   }
   const reverse = process.argv.includes('--reverse');
   const s = await stopSequence(id, { reverse }, log);
+  if (s.warning) {
+    log(`not stopped ${id}: ${s.warning}`);
+    return;
+  }
   const tail = reverse
     ? s.reversed
       ? `, reversed ${s.reversedQuantity} at market`

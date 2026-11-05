@@ -30,4 +30,26 @@ export interface VenueAdapter {
 
   /** All fills so far for this sequence's instrument. */
   getFills(): Promise<Fill[]>;
+
+  /**
+   * OPTIONAL. One order's own record, read straight from the venue, by
+   * client order id: its raw status, whether that status is final (the venue
+   * will not change the order any more), and what it executed. The runner
+   * uses it for one thing only: after canceling a market entry that showed
+   * no fill, to wait out an asynchronous cancel (Alpaca's pending_cancel)
+   * and learn whether part of it executed. Null when the venue does not know
+   * the order. Adapters without it keep the getFills-based fallback.
+   */
+  getOrderFill?(clientId: string): Promise<OrderFill | null>;
+}
+
+export interface OrderFill {
+  /** The venue's own status string, unmapped (e.g. 'pending_cancel'). */
+  status: string;
+  /** True when that status can no longer change. */
+  final: boolean;
+  /** Executed quantity in base units (0 when nothing executed). */
+  filledQty: number;
+  /** Volume-weighted average execution price (0 when unknown). */
+  avgPrice: number;
 }

@@ -11,13 +11,13 @@
 // without them is refused by publicPrice before anything is persisted.
 
 import { budgetMin, checkLadderAgainstGrids, computeLadder, rescaleAfterEntry } from '../ladder.js';
-import { buildPlan, entryActions, initialState, reconcile, type EngineAction } from '../engine.js';
+import { buildPlan, entryActions, initialState, reconcile, type EngineAction, type SequencePlan } from '../engine.js';
 import { PaperAdapter } from '../adapters/paper.js';
 import { KrakenAdapter, fetchKrakenGrids } from '../adapters/kraken.js';
 import { AlpacaAdapter } from '../adapters/alpaca.js';
-import type { VenueAdapter } from '../adapters/types.js';
+import type { OrderFill, VenueAdapter } from '../adapters/types.js';
 import { TradingaleClient, type TradingaleInstrument } from '../client.js';
-import type { Fill, LadderLevel, VenueGrids } from '../types.js';
+import type { Fill, Ladder, LadderLevel, VenueGrids } from '../types.js';
 import { krakenPublicPrice, publicPrice } from './prices.js';
 import { deleteRun, listRuns, loadRun, saveRun, type RunnerFile } from './state.js';
 import { notify, tag } from './notify.js';
@@ -166,6 +166,8 @@ export async function previewSequence(
   symbolRaw: string,
   budgetRaw: number,
   custom?: CustomParams,
+  /** Live adds the start's up-front slippage check to the problems. */
+  mode: RunnerMode = runnerMode(),
 ): Promise<SequencePreview> {
   const token = process.env.TRADINGALE_TOKEN;
   if (!token) throw new Error('Set TRADINGALE_TOKEN (create one at tradingale.com/settings/api)');
@@ -201,6 +203,15 @@ export async function previewSequence(
   const ladder = computeLadder(instrument, budget, entry, hasGrids ? grids : undefined);
   const problems = checkLadderAgainstGrids(ladder, grids);
   if (budget < floor) problems.unshift(`budget below the computed floor (~$${Math.ceil(floor)})`);
+  // The live start's up-front slippage refusal, surfaced here so a preview
+  // never shows a clean ladder that a live start would then refuse.
+  if (mode === 'live' && problems.length === 0) {
+    try {
+      checkEntrySlippage(ladder, hasGrids ? grids : undefined);
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   return {
     symbol,
@@ -307,6 +318,14 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
       `Underfunded ladder (budget_min ~$${Math.ceil(floor)}): ${problems.join('; ') || 'raise the budget'}`,
     );
   }
+  // Live only (paper fills at the ticker exactly): the level 1 market buy
+  // may fill above `entry`, and the deeper levels are then shrunk to stay
+  // within the budget (rescaleAfterEntry). Check NOW, before anything is
+  // persisted or placed, that a fill ENTRY_SLIPPAGE_GUARD above the ticker
+  // would still clear the venue minimums. The shrink is monotone in the
+  // fill price, so this makes a refusal after the fill practically
+  // impossible for any fill within that slippage.
+  if (mode === 'live') checkEntrySlippage(ladder, hasGrids ? grids : undefined);
 
   const plan = buildPlan(sequenceId, ladder);
   const file: RunnerFile = {
@@ -333,32 +352,57 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     venue = paper;
   }
 
-  // Level 1 first, alone. A market buy can fill above the price used to
-  // size it; the deeper levels are then fitted to what level 1 really cost
-  // (rescaleAfterEntry) so the total never exceeds the budget. Only after
-  // that are the limit buys placed. Prices stay those computed above.
+  // Level 1 first, alone (runEntry): place the market buy, wait for its
+  // fill, cancel it if none shows up, fit the deeper levels to what level 1
+  // really cost, then place the limit buys. Three ways out besides success:
+  //  - not filled: canceled, nothing bought, the start is aborted cleanly
+  //    (phase 'canceled', kept as a record, never 'running');
+  //  - level 1 filled but the fitted ladder refused: halted with entryHalt,
+  //    which `stop --reverse` accepts so the kit can sell level 1;
+  //  - anything else (an order call threw): halted, cancel nothing.
+  let outcome: EntryOutcome;
   try {
-    const [marketEntry] = entryActions(plan);
-    if (marketEntry?.type === 'placeOrder') await venue.placeOrder(marketEntry.order);
-    const entryFill = await awaitEntryFill(venue, `${sequenceId}-buy-1`, mode === 'live');
-    if (!entryFill) {
-      throw new Error('the level 1 market buy did not report a fill; no limit buy was placed');
-    }
-    try {
-      file.plan = buildPlan(sequenceId, rescaleAfterEntry(plan.ladder, entryFill, hasGrids ? grids : undefined));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`${message}; level 1 is filled and no limit buy was placed: that position is yours to sell on the venue`);
-    }
-    saveRun(file, sequenceId);
-    for (const action of entryActions(file.plan)) {
-      if (action.type === 'placeOrder' && action.order.level > 1) await venue.placeOrder(action.order);
-    }
+    outcome = await runEntry(venue, plan, {
+      live: mode === 'live',
+      grids: hasGrids ? grids : undefined,
+      onPlan: (fitted) => {
+        file.plan = fitted;
+        saveRun(file, sequenceId);
+      },
+    });
   } catch (error) {
     // Real orders may already rest on the book: halt loudly, cancel nothing.
     const message = error instanceof Error ? error.message : String(error);
     file.state.phase = 'halted';
     file.state.haltReason = `entry placement failed: ${message}. Check and cancel your open orders on the venue yourself.`;
+    saveRun(file, sequenceId);
+    throw new Error(file.state.haltReason);
+  }
+
+  if (outcome.kind === 'not-filled') {
+    const message =
+      'Entry order did not fill; it was canceled and nothing was started. Try again.' +
+      (assetType === 'stock'
+        ? ' The US stock market may be closed (regular hours 9:30 to 16:00 ET, Monday to Friday).'
+        : '');
+    file.state.phase = 'canceled';
+    file.state.haltReason = message;
+    file.neverStarted = true; // kept as a record, excluded from every metric
+    file.lastCycleAt = new Date().toISOString();
+    saveRun(file, sequenceId);
+    throw new Error(message);
+  }
+  if (outcome.kind === 'entry-halt') {
+    file.state.phase = 'halted';
+    if (outcome.filled) file.state.deepestFilledLevel = 1;
+    file.entryHalt = true;
+    file.fills = await venue.getFills().catch(() => file.fills);
+    file.state.haltReason =
+      `${outcome.reason}; ` +
+      (outcome.filled
+        ? 'level 1 is filled and no limit buy was placed. '
+        : 'no limit buy was placed and level 1 may be partly filled: check the order on the venue. ') +
+      `Sell it through the kit with \`npm run runner -- stop ${sequenceId} --reverse\` (Stop + reverse in the web runner), or keep it and sell it on the venue yourself.`;
     saveRun(file, sequenceId);
     throw new Error(file.state.haltReason);
   }
@@ -388,6 +432,126 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     martingaleScore: instrument.martingaleScore,
     startingale: instrument.startingale,
   };
+}
+
+/**
+ * Worst-case slippage of the level 1 market buy that a live start must
+ * survive (see the up-front check in startSequence).
+ */
+export const ENTRY_SLIPPAGE_GUARD = 0.03;
+
+/**
+ * Refuse a live start up front when a level 1 fill ENTRY_SLIPPAGE_GUARD
+ * above the sizing price would make the fitted ladder break the venue
+ * minimums: the same rescaleAfterEntry / checkLadderAgainstGrids path the
+ * real fill goes through, run on the worst case before anything is placed.
+ */
+export function checkEntrySlippage(ladder: Ladder, grids?: VenueGrids): void {
+  try {
+    rescaleAfterEntry(
+      ladder,
+      { price: ladder.entryPrice * (1 + ENTRY_SLIPPAGE_GUARD), quantity: ladder.levels[0].quantity },
+      grids,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Start refused: if the market entry filled ${ENTRY_SLIPPAGE_GUARD * 100}% above $${ladder.entryPrice}, the ladder fitted to the budget would break the venue minimums (${message}). Nothing was placed. Raise the budget.`,
+    );
+  }
+}
+
+/** Polls of getFills after canceling an unfilled entry (cancels settle asynchronously). */
+const POST_CANCEL_ATTEMPTS = 5;
+
+export type EntryOutcome =
+  /** Level 1 filled (partial = only after its cancel), limit buys placed. */
+  | { kind: 'started'; plan: SequencePlan; partial: boolean }
+  /** No fill within the polls: the entry was canceled, nothing was bought. */
+  | { kind: 'not-filled' }
+  /**
+   * No limit buy placed and the sequence must halt: level 1 filled but the
+   * fitted ladder was refused (filled: true), or the canceled entry never
+   * reached a final state on the venue (filled: false, unknown).
+   */
+  | { kind: 'entry-halt'; reason: string; filled: boolean };
+
+/**
+ * The live start, after the plan is persisted: the same steps as
+ * Tradingale's own execution rail.
+ *  1. Place level 1 (market) alone and wait for its fill (awaitEntryFill).
+ *  2. No fill: cancel it, then look again (a cancel can reveal a partial
+ *     fill, or a fill the venue had not listed yet). Still nothing, and the
+ *     order is no longer open: 'not-filled', nothing was bought. Still open:
+ *     throw (the caller halts; never claim a clean abort it cannot prove).
+ *  3. Whatever filled is level 1: rescaleAfterEntry fits the deeper levels
+ *     to its real cost. Refused: 'entry-halt' (level 1 held, no limit buy).
+ *  4. onPlan(fitted plan) persists it, then the limit buys go out.
+ * Order calls that throw propagate: the caller halts and cancels nothing.
+ */
+export async function runEntry(
+  venue: VenueAdapter,
+  plan: SequencePlan,
+  options: {
+    live: boolean;
+    grids?: VenueGrids;
+    onPlan?: (plan: SequencePlan) => void;
+    attempts?: number;
+    delayMs?: number;
+  },
+): Promise<EntryOutcome> {
+  const { live, grids, onPlan, attempts = 10, delayMs = 1_000 } = options;
+  const [marketEntry] = entryActions(plan);
+  if (marketEntry?.type !== 'placeOrder') throw new Error('the plan has no level 1 market buy');
+  const entryId = marketEntry.order.clientId;
+  await venue.placeOrder(marketEntry.order);
+
+  let partial = false;
+  let fill = await awaitEntryFill(venue, entryId, live, attempts, delayMs);
+  if (!fill) {
+    await venue.cancelOrder(entryId);
+    if (venue.getOrderFill) {
+      // The order's own record: wait while the cancel is not final
+      // (Alpaca's pending_cancel), then decide on what it executed.
+      let record: OrderFill | null = null;
+      for (let attempt = 0; attempt < POST_CANCEL_ATTEMPTS; attempt++) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        record = await venue.getOrderFill(entryId);
+        if (record?.final) break;
+      }
+      if (!record?.final) {
+        return {
+          kind: 'entry-halt',
+          filled: false,
+          reason: `the level 1 market buy did not fill within the wait and its cancel was not confirmed final (venue status: ${record?.status ?? 'unknown'})`,
+        };
+      }
+      if (!(record.filledQty > 0)) return { kind: 'not-filled' };
+      fill = { price: record.avgPrice, quantity: record.filledQty };
+    } else {
+      fill = await awaitEntryFill(venue, entryId, live, POST_CANCEL_ATTEMPTS, delayMs);
+      if (!fill) {
+        const stillOpen = (await venue.getOpenOrders()).some((o) => o.clientId === entryId);
+        if (stillOpen) {
+          throw new Error('the level 1 market buy did not fill and could not be confirmed canceled; no limit buy was placed');
+        }
+        return { kind: 'not-filled' };
+      }
+    }
+    partial = true;
+  }
+
+  let fitted: SequencePlan;
+  try {
+    fitted = buildPlan(plan.sequenceId, rescaleAfterEntry(plan.ladder, fill, grids));
+  } catch (error) {
+    return { kind: 'entry-halt', filled: true, reason: error instanceof Error ? error.message : String(error) };
+  }
+  onPlan?.(fitted);
+  for (const action of entryActions(fitted)) {
+    if (action.type === 'placeOrder' && action.order.level > 1) await venue.placeOrder(action.order);
+  }
+  return { kind: 'started', plan: fitted, partial };
 }
 
 /**
@@ -635,7 +799,11 @@ export async function stopSequence(
 ): Promise<StopSummary> {
   const file = loadRun(sequenceId);
   if (!file) throw new Error(`unknown sequence ${sequenceId}`);
-  if (file.state.phase !== 'running') {
+  // One halted state is accepted: entryHalt (level 1 filled, the fitted
+  // ladder refused, no limit buy placed). Only with reverse, so the kit can
+  // sell level 1; a plain stop leaves it halted and says how to exit.
+  const entryHalted = file.state.phase === 'halted' && file.entryHalt === true;
+  if (file.state.phase !== 'running' && !(entryHalted && options.reverse)) {
     return {
       sequenceId,
       venue: file.venue,
@@ -643,7 +811,9 @@ export async function stopSequence(
       canceledOrders: 0,
       reversed: false,
       reversedQuantity: 0,
-      warning: `sequence is ${file.state.phase}, not running`,
+      warning: entryHalted
+        ? 'sequence is halted with level 1 filled and no limit buy placed: use stop --reverse to sell level 1 (or sell it on the venue yourself)'
+        : `sequence is ${file.state.phase}, not running`,
     };
   }
 
@@ -700,6 +870,7 @@ export async function stopSequence(
   }
 
   file.state.phase = 'canceled';
+  file.entryHalt = undefined;
   file.fills = await venue.getFills(); // final history for the journal
   if (price !== null) file.lastPrice = price;
   file.state.haltReason = options.reverse
@@ -770,7 +941,10 @@ export interface JournalEntry {
   assetType: 'crypto' | 'stock';
   venue: 'paper' | 'kraken' | 'alpaca';
   live: boolean;
+  /** 'not started' for a start aborted before any fill (neverStarted). */
   phase: string;
+  /** Aborted start: listed, never counted in journalMetrics. */
+  neverStarted: boolean;
   budget: number;
   /** Quote spent on filled buys. */
   capitalUsed: number;
@@ -825,7 +999,8 @@ function entryFor(file: RunnerFile, sequenceId: string): JournalEntry {
     assetType: file.assetType ?? 'crypto',
     venue: file.venue,
     live: file.venue !== 'paper',
-    phase: file.state.phase,
+    phase: file.neverStarted ? 'not started' : file.state.phase,
+    neverStarted: file.neverStarted === true,
     budget: file.budget,
     capitalUsed,
     proceeds,
@@ -905,7 +1080,10 @@ export interface JournalMetrics {
  * would report a number that describes neither.
  */
 export function journalMetrics(scope: 'live' | 'paper' | 'all' = 'all'): JournalMetrics {
-  const all = journal().filter((e) => (scope === 'all' ? true : scope === 'live' ? e.live : !e.live));
+  // Aborted starts (neverStarted) are not sequences: no metric counts them.
+  const all = journal().filter(
+    (e) => !e.neverStarted && (scope === 'all' ? true : scope === 'live' ? e.live : !e.live),
+  );
   const closed = all.filter((e) => e.phase !== 'running');
   const active = all.filter((e) => e.phase === 'running');
   const wins = closed.filter((e) => e.realized > 0);
@@ -992,6 +1170,8 @@ export interface SequenceStatus {
   assetType: 'crypto' | 'stock';
   phase: string;
   haltReason: string | null;
+  /** Halted with level 1 filled and no limit buy: stop + reverse accepted. */
+  entryHalt?: boolean;
   budget: number;
   createdAt: string;
   deepestFilledLevel: number;
@@ -1026,6 +1206,7 @@ export function statusAll(): SequenceStatus[] {
       assetType: sequenceAssetType(file),
       phase: file.state.phase,
       haltReason: file.state.haltReason,
+      entryHalt: file.state.phase === 'halted' && file.entryHalt === true,
       budget: file.budget,
       createdAt: file.createdAt,
       deepestFilledLevel: file.state.deepestFilledLevel,
