@@ -111,6 +111,76 @@ export function computeLadder(
 }
 
 /**
+ * Fit the deeper levels to the ACTUAL level 1 fill, so the total never
+ * exceeds the budget.
+ *
+ * Why: computeLadder sizes level 1 from the price you saw (the ticker), but
+ * level 1 is a market buy. When it fills above that price, level 1 costs
+ * qty1 * fill instead of qty1 * entry and, with every deeper level sized to
+ * spend exactly what was left, the total overshoots by
+ * budget * initialBetRatio * slippage (0.3% at a 10% ratio and 3% slippage).
+ *
+ * What it does, and what it keeps:
+ *  - level 1 takes the fill's price and quantity (its real cost);
+ *  - levels 2+ quantities are multiplied by ONE common factor,
+ *    (budget - actual level 1 cost) / planned cost of levels 2+, applied only
+ *    when the plan would exceed the budget (a fill at or below the entry
+ *    changes nothing), then floored to the
+ *    step: the multiplier ratios between deeper levels are preserved and
+ *    flooring can only lower the cost;
+ *  - buy and exit prices are untouched: they were fixed from the sizing
+ *    price, and nothing is recomputed from the fill (the plan stays frozen).
+ * Throws LadderError when level 1 alone used the budget, or when the shrunk
+ * ladder no longer clears the venue's minimums: refuse, never place a
+ * ladder that silently breaks the grids.
+ */
+export function rescaleAfterEntry(
+  ladder: Ladder,
+  fill: { price: number; quantity: number },
+  grids?: VenueGrids,
+): Ladder {
+  if (!(fill.price > 0) || !(fill.quantity > 0)) {
+    throw new LadderError('level 1 fill must have a positive price and quantity');
+  }
+  const [first, ...deeper] = ladder.levels;
+  const cost1 = fill.quantity * fill.price;
+  const deeperCost = deeper.reduce((sum, l) => sum + l.cost, 0);
+  const left = ladder.budget - cost1;
+  if (deeper.length > 0 && !(left > 0)) {
+    throw new LadderError(
+      `level 1 filled at ${fill.price} for ${cost1.toFixed(2)}: nothing left of the ${ladder.budget} budget for deeper levels`,
+    );
+  }
+  // Already within budget (fill at or below the entry): nothing changes.
+  const factor = cost1 + deeperCost <= ladder.budget || !(deeperCost > 0) ? 1 : left / deeperCost;
+
+  const levels: LadderLevel[] = [];
+  let cumulative = fill.quantity;
+  levels.push({ ...first, buyPrice: fill.price, quantity: fill.quantity, cost: cost1, cumulativeQuantity: cumulative });
+  for (const level of deeper) {
+    // factor 1: keep the planned quantity as is (re-flooring an on-grid
+    // value can drop a step through float error on fine steps).
+    const scaled = level.quantity * factor;
+    const quantity = factor === 1 ? level.quantity : grids ? snapQuantity(scaled, grids.qtyStep) : scaled;
+    cumulative += quantity;
+    levels.push({ ...level, quantity, cost: quantity * level.buyPrice, cumulativeQuantity: cumulative });
+  }
+
+  const rescaled: Ladder = {
+    ...ladder,
+    levels,
+    totalCost: levels.reduce((sum, l) => sum + l.cost, 0),
+  };
+  if (grids) {
+    const problems = checkLadderAgainstGrids(rescaled, grids);
+    if (problems.length > 0) {
+      throw new LadderError(`ladder refused after the level 1 fill: ${problems.join('; ')}`);
+    }
+  }
+  return rescaled;
+}
+
+/**
  * Minimum viable budget for a venue's grids (handbook section 5).
  *
  * Level 1 carries the smallest quantity of the ladder, so it hits the

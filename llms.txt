@@ -39,6 +39,9 @@ Engine invariants (violating these is THE classic integration bug):
   - a sequence plan is FROZEN at birth; nothing is recomputed later
   - exactly one sell order is active at a time (cancel, verify, then place)
   - underfunded ladders are refused with budgetMin, never distorted
+  - total planned cost never exceeds the budget: after the market entry fills,
+    rescaleAfterEntry fits levels 2+ to its real cost (prices unchanged), then
+    the limit buys are placed
 
 Wording rules when building on this: the metrics are descriptive, never
 signals/advice/forecasts; simulated results must be labeled simulated.

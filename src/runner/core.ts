@@ -10,7 +10,7 @@
 // Alpaca paper keys for prices (data only, see prices.ts), and a start
 // without them is refused by publicPrice before anything is persisted.
 
-import { budgetMin, checkLadderAgainstGrids, computeLadder } from '../ladder.js';
+import { budgetMin, checkLadderAgainstGrids, computeLadder, rescaleAfterEntry } from '../ladder.js';
 import { buildPlan, entryActions, initialState, reconcile, type EngineAction } from '../engine.js';
 import { PaperAdapter } from '../adapters/paper.js';
 import { KrakenAdapter, fetchKrakenGrids } from '../adapters/kraken.js';
@@ -333,9 +333,26 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     venue = paper;
   }
 
+  // Level 1 first, alone. A market buy can fill above the price used to
+  // size it; the deeper levels are then fitted to what level 1 really cost
+  // (rescaleAfterEntry) so the total never exceeds the budget. Only after
+  // that are the limit buys placed. Prices stay those computed above.
   try {
-    for (const action of entryActions(plan)) {
-      if (action.type === 'placeOrder') await venue.placeOrder(action.order);
+    const [marketEntry] = entryActions(plan);
+    if (marketEntry?.type === 'placeOrder') await venue.placeOrder(marketEntry.order);
+    const entryFill = await awaitEntryFill(venue, `${sequenceId}-buy-1`, mode === 'live');
+    if (!entryFill) {
+      throw new Error('the level 1 market buy did not report a fill; no limit buy was placed');
+    }
+    try {
+      file.plan = buildPlan(sequenceId, rescaleAfterEntry(plan.ladder, entryFill, hasGrids ? grids : undefined));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message}; level 1 is filled and no limit buy was placed: that position is yours to sell on the venue`);
+    }
+    saveRun(file, sequenceId);
+    for (const action of entryActions(file.plan)) {
+      if (action.type === 'placeOrder' && action.order.level > 1) await venue.placeOrder(action.order);
     }
   } catch (error) {
     // Real orders may already rest on the book: halt loudly, cancel nothing.
@@ -371,6 +388,32 @@ export async function startSequence(options: StartOptions, log: Logger = () => {
     martingaleScore: instrument.martingaleScore,
     startingale: instrument.startingale,
   };
+}
+
+/**
+ * The level 1 fill (volume-weighted if the venue reports it in parts).
+ * Paper fills market orders synchronously; a live venue may take a moment
+ * to list the order as closed, so live polls a bounded number of times.
+ * Returns null when no fill shows up: the caller halts, it never guesses.
+ */
+export async function awaitEntryFill(
+  venue: Pick<VenueAdapter, 'getFills'>,
+  clientId: string,
+  poll: boolean,
+  attempts = 10,
+  delayMs = 1_000,
+): Promise<{ price: number; quantity: number } | null> {
+  for (let attempt = 0; attempt < (poll ? attempts : 1); attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const parts = (await venue.getFills()).filter(
+      (f) => f.clientId === clientId && f.side === 'buy' && f.quantity > 0 && f.price > 0,
+    );
+    const quantity = parts.reduce((sum, f) => sum + f.quantity, 0);
+    if (quantity > 0) {
+      return { price: parts.reduce((sum, f) => sum + f.price * f.quantity, 0) / quantity, quantity };
+    }
+  }
+  return null;
 }
 
 // Rebuild a PaperAdapter from persisted fills so restarts stay consistent.

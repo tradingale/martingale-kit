@@ -1,5 +1,5 @@
 export * from './types.js';
-export { computeLadder, budgetMin, checkLadderAgainstGrids, LadderError } from './ladder.js';
+export { computeLadder, rescaleAfterEntry, budgetMin, checkLadderAgainstGrids, LadderError } from './ladder.js';
 export { snapPrice, snapQuantity, fallbackDecimals } from './grid.js';
 export {
   buildPlan,

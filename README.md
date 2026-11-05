@@ -7,6 +7,7 @@ This kit is everything that was hard to get right, as exact, tested TypeScript:
 - **The ladder math**: `computeLadder()` turns [Tradingale's](https://tradingale.com) dimensionless model parameters plus your budget and a live entry price into a complete plan. Including the rule that breaks most integrations: multipliers scale QUANTITIES, never dollar costs.
 - **The state machine**: plan-in-database pattern, the one-active-sell invariant with structural cancel-verify-place, a pure `reconcile()` you can unit test.
 - **Directional grid snapping**: exit prices UP, buy prices DOWN, quantities floored. The sub-$1 rounding lesson is a test fixture.
+- **The budget is a ceiling**: a market entry that fills above the price used to size it would otherwise overspend by budget x initial bet ratio x slippage. `rescaleAfterEntry()` fits the deeper levels to what level 1 really cost (one common factor, quantities floored, prices untouched) and refuses the ladder if that breaks the venue minimums. The runner places the limit buys only after that.
 - **`budgetMin()`**: the minimum viable capital for a venue's grids, so a runner refuses to start instead of placing a distorted ladder.
 - **A `PaperAdapter`**: local fill simulator. The whole engine runs end to end with zero keys, right now.
 - **A `TradingaleClient`**: fetches the model parameters from the [REST API](https://tradingale.com/settings/api).
@@ -17,7 +18,7 @@ Revolut X is worth knowing about if you are in Europe: 61 EUR-quoted pairs inclu
 
 ## The mental model, in five sentences
 
-A sequence is **not** adaptive. It is frozen at birth: the first market buy fixes the entry price, and every other order is computed at that instant (all the limit buys and all the sell templates); nothing is ever recomputed. Every buy can rest on the book from second one. Only **one** order ever changes: the sell. A limit buy fills? Cancel the sell, place the next level's template (cumulative quantity, at the previous level's buy price). The sell fills? The sequence is over, above its average cost by construction.
+A sequence is **not** adaptive. It is frozen at birth: the live price at start fixes every buy and exit price, and the first market buy's actual fill fixes the quantities of the deeper levels (`rescaleAfterEntry`: if level 1 filled above the price used to size it, levels 2+ shrink by one common factor so the total never exceeds your budget); nothing is ever recomputed after that. Every limit buy rests on the book from the moment level 1 has filled. Only **one** order ever changes: the sell. A limit buy fills? Cancel the sell, place the next level's template (cumulative quantity, at the previous level's buy price). The sell fills? The sequence is over, above its average cost by construction.
 
 `reconcile()` in this kit is exactly those five sentences as a pure function.
 
@@ -154,7 +155,9 @@ Build me a runner on top of the kit:
 1. Fetch instruments from the Tradingale API with my token (TRADINGALE_TOKEN
    env var) and let me pick one and a budget.
 2. Use computeLadder / buildPlan / runCycle exactly as designed; never
-   reimplement the math. Check budgetMin before starting.
+   reimplement the math. Check budgetMin before starting. Place the market
+   entry alone, then rescaleAfterEntry with its real fill before placing the
+   limit buys, so a slipped entry never overspends the budget.
 3. Wire the PaperAdapter first and drive it with live prices from the venue's
    public ticker, so I can watch full sequences run with zero keys.
 4. Implement the VenueAdapter interface for [MY VENUE] from its official API
